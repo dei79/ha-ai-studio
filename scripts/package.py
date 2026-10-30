@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_FILES = (
     '.dockerignore', 'config.yaml', 'Dockerfile', 'DOCS.md', 'CHANGELOG.md',
-    'LICENSE', 'THIRD_PARTY.md', 'requirements.txt', 'requirements.lock.txt',
+    'LICENSE', 'README.md', 'icon.png', 'logo.png', 'icon.svg', 'THIRD_PARTY.md', 'requirements.txt', 'requirements.lock.txt',
 )
 STATIC_FILES = ('index.html', 'app.js', 'ha-example.js', 'style.css')
 
