@@ -45,12 +45,24 @@ def create_app(root=None, dev=None):
 
     async def static(request):
         name = request.match_info['name']
-        if name not in ('app.js', 'style.css', 'ha-example.js'):
+        if name not in ('app.js', 'style.css', 'ha-example.js', 'schema-editor.js'):
             raise web.HTTPNotFound()
         return web.FileResponse(STATIC / name)
 
     async def api(request):
         action = request.match_info['action']
+        if action == 'repositories':
+            if request.method=='GET':return web.json_response(studio.repositories.public())
+            if request.method=='POST':return web.json_response(await studio.repositories.save(await request.json()))
+        if action == 'repository-refresh' and request.method=='POST':
+            value=await request.json()
+            if not isinstance(value,dict) or set(value)!={'id'} or not isinstance(value['id'],str):raise Invalid('Provide repository ID.')
+            studio.repositories.refresh(value['id']);return web.json_response(studio.repositories.public())
+        if action == 'environment' and request.method=='POST':
+            service=studio.get(request.query.get('id'));service.ensure_idle()
+            if not service.environment:raise Invalid('Built-in actions need no installation.')
+            if service.enabled:raise Invalid('Deactivate the action before rebuilding its environment.')
+            service.environment.start();return web.json_response(service.status())
         if action == 'discovery':
             if request.method == 'GET':return web.json_response(studio.discovery.public())
             if request.method == 'POST':return web.json_response(await studio.discovery.save(await request.json()))

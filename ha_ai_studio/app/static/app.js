@@ -1,8 +1,9 @@
+import {render as renderSchema} from './schema-editor.js';
 import {mqttTestAutomationYaml} from './ha-example.js';
 const $=id=>document.getElementById(id);
 let current=null,state=null,dirty=false,busy=false,readSettings=null,brokerData=null,catalog=[],deleteTarget=null;
 let brokerEditing=null,brokerDeleteTarget=null,leaveDestination='actions',discoveryDirty=false;
-let discoveryData=null;
+let discoveryData=null,listSignature=null,repositorySignature=null;
 const modules=new Map();
 function renderJson(id,value){
  const code=$(id),source=JSON.stringify(value,null,2);code.replaceChildren();
@@ -29,6 +30,7 @@ async function api(action,body){
 function message(text,error=false){$('message').textContent=text;$('message').hidden=!text;$('message').className=error?'error':'';}
 async function action(fn){if(busy)return;busy=true;sync();try{await fn();}catch(error){message(error.message,true);}finally{busy=false;sync();}}
 function sync(){
+ if(state?.plugin?.dynamic)renderEnvironment(state);
  for(const id of ['save','schemas','create','back','nav-actions','nav-settings','add-broker','refresh-brokers','discovery-refresh'])$(id).disabled=busy;
  $('ha-example').disabled=busy||!state?.supported;
  $('save').disabled||=!state?.supported;$('schemas').disabled||=!state?.supported;
@@ -40,9 +42,9 @@ function changed(){dirty=true;sync();}
 function readDraft(){return {name:$('action-name').value,input:{broker_id:$('input-broker').value||null,topic:$('input-topic').value},settings:readSettings?readSettings():{},output:{broker_id:$('output-broker').value||null,topic:$('output-topic').value}};}
 function setNav(page){for(const id of ['actions','settings']){if(id===page)$('nav-'+id).setAttribute('aria-current','page');else $('nav-'+id).removeAttribute('aria-current');}}
 async function list(){
- const data=await api('actions');catalog=data.types;
+ const data=await api('actions');catalog=data.types;const signature=JSON.stringify(data);if(signature===listSignature)return data;listSignature=signature;
  $('action-rows').replaceChildren();$('empty').hidden=!!data.actions.length;
- for(const item of data.actions){const row=document.createElement('tr');for(const text of [item.definition.name,item.plugin?.name||'Legacy workflow',!item.supported?'Unsupported · Disabled':item.busy?'Busy':item.enabled?'Active':'Inactive']){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}
+ for(const item of data.actions){const row=document.createElement('tr');for(const text of [item.definition.name,item.plugin?.name||'Legacy workflow',!item.supported?'Unsupported · Disabled':item.busy?'Busy':item.enabled?'Active':'Inactive',item.environment.status]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}
  const cell=document.createElement('td');cell.className='row-actions';const edit=iconButton('edit','Edit '+item.definition.name);edit.onclick=()=>action(()=>openAction(item.definition.id));const remove=iconButton('delete','Delete '+item.definition.name);remove.disabled=item.busy;remove.onclick=()=>{if(busy)return;deleteTarget=item.definition;$('delete-description').textContent=`Delete “${deleteTarget.name}”?`;$('delete-error').textContent='';$('delete-panel').showModal();};const live=iconButton('live','Live activity '+item.definition.name);live.onclick=()=>action(()=>openLive(item.definition.id,item.definition.name));cell.append(live,edit,remove);row.append(cell);$('action-rows').append(row);}
  return data;
 }
@@ -51,8 +53,9 @@ async function openAction(id){stopLive();
  current=id;state=await api('action');brokerData=await api('brokers');dirty=false;readSettings=null;
  $('actions').hidden=true;$('settings-page').hidden=true;$('editor').hidden=false;setNav('actions');$('action-title').textContent=state.definition.name;
  $('config-error').textContent=state.issues.join(' ');$('config-error').hidden=!state.issues.length;$('config-fields').hidden=!state.supported;
+ renderEnvironment(state);
  if(state.supported){const draft=state.config.draft;$('action-name').value=draft.name;$('action-active').checked=state.enabled;brokerOptions('input-broker',draft.input.broker_id,false);brokerOptions('output-broker',draft.output.broker_id,true);$('input-topic').value=draft.input.topic;$('output-topic').value=draft.output.topic;
- $('type-editor').replaceChildren();const type=state.definition.type;if(!modules.has(type))modules.set(type,await import(new URL(`../action-types/${type}/editor.js`,import.meta.url)));readSettings=modules.get(type).render($('type-editor'),structuredClone(draft.settings),{changed});
+ $('type-editor').replaceChildren();const type=state.definition.type;if(state.plugin.dynamic){readSettings=renderSchema($('type-editor'),structuredClone(draft.settings),{changed},state.plugin.settings_schema);}else{if(!modules.has(type))modules.set(type,await import(new URL(`../action-types/${type}/editor.js`,import.meta.url)));readSettings=modules.get(type).render($('type-editor'),structuredClone(draft.settings),{changed});}
  renderJson('input-schema',state.plugin.input_schema);renderJson('output-schema',state.plugin.output_schema);}
  history.replaceState(null,'',`#actions/${encodeURIComponent(id)}`);message('');
 }
@@ -61,7 +64,7 @@ async function save(){const config=readDraft();const enabled=$('action-active').
 $('save').onclick=()=>action(save);
 $('schemas').onclick=()=>{if(!busy&&state?.supported)$('schemas-panel').showModal();};
 for(const id of ['close-schemas','done-schemas'])$(id).onclick=()=>$('schemas-panel').close();
-$('create').onclick=()=>{if(busy)return;$('create-form').reset();$('new-type').replaceChildren();for(const type of catalog){const option=document.createElement('option');option.value=type.type;option.textContent=type.name;$('new-type').append(option);}$('create-error').textContent='';$('create-panel').showModal();};
+$('create').onclick=()=>{if(busy)return;$('create-form').reset();$('new-type').replaceChildren();for(const type of catalog){const option=document.createElement('option');option.value=type.type;option.textContent=type.name;if(type.dynamic)option.textContent+=` · ${type.version} · ${type.commit.slice(0,8)}`;$('new-type').append(option);}$('create-error').textContent='';$('create-panel').showModal();};
 $('close-create').onclick=()=>{if(!busy)$('create-panel').close();};
 $('create-form').onsubmit=event=>{event.preventDefault();action(async()=>{try{const name=$('new-name').value.trim();const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,36);const id=(/^[a-z]/.test(slug)?slug:'action')+'-'+crypto.randomUUID().slice(0,8);await api('actions',{id,name,type:$('new-type').value});$('create-panel').close();await openAction(id);}catch(error){$('create-error').textContent=error.message;}});};
 async function leave(){stopLive();current=null;state=null;dirty=false;discoveryDirty=false;readSettings=null;$('editor').hidden=true;$('actions').hidden=leaveDestination==='settings';$('settings-page').hidden=leaveDestination!=='settings';history.replaceState(null,'','#'+leaveDestination);setNav(leaveDestination);message('');if(leaveDestination==='settings')await showSettings();else await list();}
@@ -74,6 +77,7 @@ for(const dialog of document.querySelectorAll('dialog'))dialog.addEventListener(
 $('confirm-delete').onclick=()=>action(async()=>{try{await api('delete-action',{id:deleteTarget.id,confirmed:true});$('delete-panel').close();await list();message('Action deleted. Original files and IDs were preserved.');}catch(error){$('delete-error').textContent=error.message;}});
 async function showSettings(){stopLive();
  $('actions').hidden=true;$('editor').hidden=true;$('settings-page').hidden=false;setNav('settings');history.replaceState(null,'','#settings');
+ await renderRepositories();
  const data=await api('brokers');brokerData=data;discoveryData=await api('discovery');$('broker-rows').replaceChildren();$('no-brokers').hidden=!!data.brokers.length;
  for(const broker of data.brokers){
   const row=document.createElement('tr');
@@ -197,3 +201,28 @@ async function pollLive(generation,id){
 }
 $('live-back').onclick=()=>navigate('actions');
 $('live-pause').onclick=()=>{livePaused=!livePaused;$('live-pause').textContent=livePaused?'Resume':'Pause';$('live-status').textContent=livePaused?'Display paused · Action continues running':'Resuming live activity…';};
+
+async function renderRepositories(){
+ const data=await api('repositories');const signature=JSON.stringify(data);if(signature===repositorySignature)return;repositorySignature=signature;$('repository-rows').replaceChildren();
+ for(const repo of data.repositories){const row=document.createElement('tr');for(const text of [repo.url,repo.ref,repo.status,repo.actions.map(a=>a.manifest.name+' '+a.manifest.version).join(', ')||'—']){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const refresh=document.createElement('button');refresh.textContent='Refresh';refresh.disabled=repo.status==='Syncing';refresh.onclick=()=>action(async()=>{await api('repository-refresh',{id:repo.id});await renderRepositories();});cell.append(refresh);row.append(cell);$('repository-rows').append(row);if(repo.status==='Failed'){const detail=document.createElement('tr');const message=document.createElement('td');message.colSpan=5;message.textContent=repo.logs.join(' ');detail.append(message);$('repository-rows').append(detail);}}
+}
+$('add-repository').onclick=()=>{if(busy)return;$('repository-form').reset();$('repository-error').textContent='';$('repository-panel').showModal();};
+$('close-repository').onclick=()=>{if(!busy)$('repository-panel').close();};
+$('repository-form').onsubmit=event=>{event.preventDefault();action(async()=>{try{await api('repositories',{url:$('repository-url').value,ref:$('repository-ref').value});$('repository-panel').close();await renderRepositories();}catch(error){$('repository-error').textContent=error.message;}});};
+function renderEnvironment(value){
+ const dynamic=!!value.plugin?.dynamic,e=value.environment;$('environment-card').hidden=!dynamic;$('action-active').disabled=dynamic&&e.status!=='Ready'&&!value.enabled;if(!dynamic)return;
+ $('config-error').textContent=value.issues.join(' ');$('config-error').hidden=!value.issues.length;
+ $('environment-status').textContent=e.status;$('environment-version').textContent=`Version ${value.plugin.version} · Commit ${value.plugin.commit}`;
+ const installing=['Queued','Installing','Verifying'].includes(e.status);$('environment-rebuild').disabled=busy||value.enabled||value.busy||installing;
+ $('environment-name').textContent=value.definition.name;$('environment-detail-status').textContent=e.status;
+ $('environment-summary').dataset.state=e.status==='Ready'?'success':e.status==='Failed'?'error':'pending';$('environment-log').textContent=e.logs.join('\n');
+
+}
+$('environment-open').onclick=()=>$('environment-panel').showModal();
+$('close-environment').onclick=()=>$('environment-panel').close();
+$('environment-refresh').onclick=()=>action(async()=>{const value=await api('action');state=value;renderEnvironment(value);});
+$('environment-rebuild').onclick=()=>action(async()=>{state=await api('environment',{});renderEnvironment(state);$('environment-panel').showModal();});
+setInterval(async()=>{
+ if(busy)return;
+ try{if(!$('settings-page').hidden){await renderRepositories();}else if(!$('actions').hidden&&!document.querySelector('dialog[open]')){await list();}else if(current&&state?.plugin?.dynamic&&!$('editor').hidden){const id=current;const value=await api('action');if(current===id){state.environment=value.environment;state.busy=value.busy;state.issues=value.issues;renderEnvironment(state);}}}catch{}
+},2000);

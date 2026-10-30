@@ -11,7 +11,7 @@ Runtime dependencies come from PyPI and are pinned in `requirements.lock.txt`. I
 | paho-mqtt | EPL-2.0 OR BSD-3-Clause |
 | aiohappyeyeballs, typing_extensions | PSF-2.0 |
 | aiosignal, frozenlist, multidict, propcache, yarl | Apache-2.0 |
-| attrs | MIT |
+| attrs, jsonschema, jsonschema-specifications, referencing, rpds-py | MIT |
 | idna | BSD-3-Clause |
 
 The Ubuntu 24.04 LTS container base image is pinned by digest in the Dockerfile; its own runtime and system packages retain their upstream notices. No third-party frontend framework, fonts, images or CDN resources are included. HA AI Studio original code, documentation and artwork are licensed under MIT; see LICENSE. Third-party components retain their respective licenses.

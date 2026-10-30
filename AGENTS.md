@@ -3,7 +3,7 @@
 ## Product and UI
 - Home Assistant owns triggers, schedules, conditions and follow-up actions. This app executes individual configured Actions, not workflows.
 - The Actions table is the main page. Create action opens a right-hand side panel with name and action type. Editing opens a separate configuration page with Input, type settings and Output. No workflow diagram, mappings, templates or activity chains.
-- Only Echo is implemented. Each type has its own directory under `ha_ai_studio/app/action_types/`, with schemas, validation, execution and editor; register it explicitly.
+- Echo is the built-in type, explicitly registered under `ha_ai_studio/app/action_types/`. Trusted Git action types use validated manifests, a schema editor and a separate per-instance venv runner. Local repository sources are not supported.
 - Keep the Home Assistant visual style: HA blue, compact navigation, plain cards and clear textual states. All UI, errors, protocol diagnostics and documentation must be English.
 - Use only the embedded Codex browser (IAB) for interactive and visual testing; reuse the existing tab. No external Playwright, Chrome or Safari.
 

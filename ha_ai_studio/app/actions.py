@@ -12,6 +12,7 @@ from .store import Store
 from .brokers import Brokers, topic_check
 from .mqtt import MQTT, run_transport
 from .action_types import TYPES, CATALOG
+from .plugins import Repositories, Environment
 
 MAX_BYTES=16384
 MAX_JOBS=256
@@ -48,9 +49,12 @@ def digest(body):
     return hashlib.sha256(json.dumps(body,sort_keys=True,allow_nan=False,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
 class ActionService:
-    def __init__(self,root,definition,namespace,brokers):
+    def __init__(self,root,definition,namespace,brokers,repositories=None):
         self.store=Store(root);self.definition=copy.deepcopy(definition);self.brokers=brokers
-        self.type=definition.get('action_type');self.supported=self.type in TYPES
+        self.type=definition.get('action_type')
+        self.plugin=repositories.bound(definition['plugin']) if definition.get('plugin') and repositories else TYPES.get(self.type)
+        self.supported=self.plugin is not None
+        self.environment=Environment(self.store,self.plugin) if definition.get('plugin') and self.plugin else None
         self.identity=self.store.read('identity.json')
         if self.identity is None:
             ident='studio_'+hashlib.sha256((namespace+'/'+definition['id']).encode()).hexdigest()[:24];self.identity={'prefix':ident,'device_id':ident};self.store.write('identity.json',self.identity)
@@ -92,7 +96,7 @@ class ActionService:
     @property
     def enabled(self):return self.supported and self.config['enabled'] and bool(self.config['active']) and not self.deleted
     @property
-    def busy(self):return self.lock.locked() or self.running or self.delivering or bool(self.job and not self.job.done())
+    def busy(self):return bool(self.environment and self.environment.task and not self.environment.task.done()) or self.lock.locked() or self.running or self.delivering or bool(self.job and not self.job.done())
     def ensure_idle(self):
         if self.deleted:raise Invalid('Action has been deleted.')
         if self.busy:raise Invalid('Action is busy. Try again after the current operation.')
@@ -105,7 +109,7 @@ class ActionService:
             if not isinstance(part,dict) or set(part)!={'broker_id','topic'}:raise Invalid('Provide broker and topic for input and output.')
             if part['broker_id'] is not None and (not isinstance(part['broker_id'],str) or len(part['broker_id'])>80):raise Invalid('Invalid broker selection.')
             topic_check(part['topic'])
-        TYPES[self.type].validate(value['settings'])
+        self.plugin.validate(value['settings'])
         result=copy.deepcopy(value);result['name']=result['name'].strip();return result
     def routes(self,config=None):
         value=config or (self.config or {}).get('active')
@@ -125,19 +129,23 @@ class ActionService:
         self.brokers.check_topology(self,config)
     def status(self):
         issues=[]
+        if self.environment and not self.environment.ready:issues.append('Execution blocked: Python environment is not ready. Deactivate and rebuild it.')
         if self.enabled:
             try:self.check_routes(self.config['active'])
             except Invalid as exc:issues.append(str(exc))
         return {'definition':{'id':self.definition['id'],'name':self.config['draft']['name'] if self.supported else self.definition['name'],'type':self.type},
             'supported':self.supported,'config':copy.deepcopy(self.config),'enabled':self.enabled,'busy':self.busy,'mqtt':self.mqtt_status,
+            'environment':self.environment.public() if self.environment else {'status':'Ready','logs':['Built-in action.']},
             'issues':issues if self.supported else ['Unsupported legacy workflow. Disabled; original files and IDs are preserved.'],
-            'last':copy.deepcopy(self.last),'plugin':TYPES[self.type].metadata if self.supported else None}
+            'last':copy.deepcopy(self.last),'plugin':self.plugin.metadata if self.supported else None}
     async def save(self,value,activate,*,set_enabled=None):
         if type(activate) is not bool:raise Invalid('Active must be true or false.')
         if set_enabled is not None and (type(set_enabled) is not bool or set_enabled!=activate):raise Invalid('Invalid Active state.')
         async with self.brokers.lock:
             self.ensure_idle();value=self.check_config(value)
-            if activate:self.check_routes(value)
+            if activate:
+                if self.environment:self.environment.require()
+                self.check_routes(value)
             candidate={'draft':value,'active':copy.deepcopy(value) if activate else self.config['active'],'enabled':True if activate else self.config['enabled']}
             if set_enabled is not None:candidate['enabled']=set_enabled
             async with self.lock:
@@ -153,16 +161,20 @@ class ActionService:
                 await self.disconnect()
         return self.status()
     async def test(self,config,payload):
-        config=self.check_config(config);body,error=parse(payload,TYPES[self.type])
+        if self.environment:raise Invalid('Draft preview is unavailable for Git actions. Use an isolated MQTT test instance.')
+        config=self.check_config(config);body,error=parse(payload,self.plugin)
         if error:return {'mode':'test','delivery':'not_sent','result':error}
         try:
-            data=await asyncio.wait_for(TYPES[self.type].execute(body['data'],config['settings']),30)
+            data=await self.execute(body['data'],config['settings'])
             result={'request_id':body['request_id'],'status':'success','data':data}
         except Exception:result=error_result(body['request_id'],'execution_failed','Action execution failed.')
         return {'mode':'test','delivery':'not_sent','result':result}
+    async def execute(self,data,settings):
+        if self.environment:return await self.environment.execute(data,settings)
+        return await asyncio.wait_for(self.plugin.execute(data,settings),30)
     async def request(self,payload):
         # The caller owns lock throughout execution and delivery.
-        body,error=parse(payload,TYPES[self.type])
+        body,error=parse(payload,self.plugin)
         if error:
             self.trace('error',error['error']['message']);return error,self.config['active']
         id=body['request_id'];hashed=digest(body);cached=self.jobs.get(id)
@@ -172,13 +184,14 @@ class ActionService:
             if cached.get('result') is not None:return cached['result'],cached['config']
             return error_result(id,'interrupted','Execution was interrupted. Use a new request_id only to intentionally start another execution.'),cached['config']
         config=copy.deepcopy(self.config['active']);entry={'digest':hashed,'config':config,'result':None,'execution':'processing','delivery':'not_sent'}
+        if self.environment:entry['plugin']=copy.deepcopy(self.plugin.record)
         candidate={**self.jobs,id:entry};candidate=dict(list(candidate.items())[-MAX_JOBS:])
         self.store.write('action-jobs.json',candidate);self.jobs=candidate
         self.last={'request_id':id,'execution':'processing','delivery':'not_sent','timestamp':stamp()};self.store.write('action-last.json',self.last)
         self.trace('processing','Validated request; executing '+self.type+'.')
         self.running=True
         try:
-            data=await asyncio.wait_for(TYPES[self.type].execute(body['data'],config['settings']),30)
+            data=await self.execute(body['data'],config['settings'])
             json.dumps(data,allow_nan=False)
             result={'request_id':id,'status':'success','data':data}
         except asyncio.CancelledError:raise
@@ -234,6 +247,7 @@ class ActionService:
         self.mqtt_status='Not connected' if self.enabled else 'Inactive'
     async def publish(self):
         if not self.enabled:return
+        if self.environment:self.environment.require()
         self.check_routes(self.config['active']);route=self.routes()
         if not self.mqtt:
             loop=asyncio.get_running_loop();generation=self.transport_generation
@@ -255,7 +269,7 @@ class ActionService:
         while True:
             try:
                 async with self.lock:await self.publish()
-            except Exception:self.mqtt_status='Connection or subscription failed. Check broker settings and topic permissions.'
+            except Exception:self.mqtt_status='Execution blocked: Python environment is not ready.' if self.environment and not self.environment.ready else 'Connection or subscription failed. Check broker settings and topic permissions.'
             try:generation,payload=await asyncio.wait_for(self.queue.get(),3)
             except asyncio.TimeoutError:continue
             try:await self.run_request_payload(payload,generation)
@@ -264,6 +278,7 @@ class ActionService:
                 self.trace('error',self.mqtt_status)
             finally:self.queue.task_done()
     async def close(self):
+        if self.environment:await self.environment.close()
         if self.task:
             self.task.cancel()
             try:await self.task
@@ -273,6 +288,7 @@ class ActionService:
 class Studio:
     def __init__(self,root):
         self.store=Store(root);self.lock=asyncio.Lock();self.running=False
+        self.repositories=Repositories(root)
         # Preserve the registry, paths and protocol namespace across the public rename.
         self.registry=self.store.read('agents.json',{'agents':[],'legacy_id':None})
         identity=self.store.read('identity.json')
@@ -286,28 +302,30 @@ class Studio:
         self.namespace=identity['prefix'];self.services={};self.brokers=Brokers(self.store);self.brokers.services=lambda:list(self.services.values())
         for config in self.registry['agents']:
             location=self.store.root if config['id']==self.registry.get('legacy_id') else self.store.root/'agents'/config['id']
-            self.services[config['id']]=ActionService(location,config,self.namespace,self.brokers)
+            self.services[config['id']]=ActionService(location,config,self.namespace,self.brokers,self.repositories)
         from .discovery import Discovery
         self.discovery=Discovery(self)
         self.brokers.discovery=self.discovery
     def get(self,id):
         if not isinstance(id,str) or id not in self.services:raise Invalid('Action not found.')
         return self.services[id]
-    def list(self):return {'actions':[s.status() for s in self.services.values()],'types':CATALOG,'dev':os.getenv('HA_AI_STUDIO_DEV')=='1'}
+    def list(self):return {'actions':[s.status() for s in self.services.values()],'types':CATALOG+[p.metadata for p in self.repositories.types().values()],'dev':os.getenv('HA_AI_STUDIO_DEV')=='1'}
     async def create(self,value):
         if not isinstance(value,dict) or set(value)!={'id','name','type'}:raise Invalid('Provide id, name and type.')
         if not isinstance(value['id'],str) or not re.fullmatch('[a-z][a-z0-9-]{0,47}',value['id']):raise Invalid('Action ID must use lowercase letters, digits and hyphens, up to 48 characters.')
         if not isinstance(value['name'],str) or not 1<=len(value['name'].strip())<=80 or any(ord(c)<32 for c in value['name']):raise Invalid('Name must contain 1 to 80 characters.')
-        if not isinstance(value['type'],str) or value['type'] not in TYPES:raise Invalid('Select an installed action type.')
+        if not isinstance(value['type'],str) or value['type'] not in {**TYPES,**self.repositories.types()}:raise Invalid('Select an installed action type.')
         async with self.lock:
             id=value['id']
             if id in self.services or any(c['id']==id for c in self.registry.get('deleted',[])):raise Invalid('Action ID is in use or reserved.')
             if len(self.services)>=32:raise Invalid('Maximum of 32 actions.')
             definition={'id':id,'name':value['name'].strip(),'action_type':value['type']}
-            service=ActionService(self.store.root/'agents'/id,definition,self.namespace,self.brokers)
+            if value['type'] not in TYPES:definition['plugin']=self.repositories.types()[value['type']].record
+            service=ActionService(self.store.root/'agents'/id,definition,self.namespace,self.brokers,self.repositories)
             candidate=copy.deepcopy(self.registry);candidate['agents'].append(definition)
             self.store.write('agents.json',candidate);self.registry=candidate;self.services[id]=service
             if self.running:service.task=asyncio.create_task(service.run())
+            if service.environment:service.environment.start()
             return service.status()
     async def delete(self,value):
         if not isinstance(value,dict) or set(value)!={'id','confirmed'} or value['confirmed'] is not True:raise Invalid('Confirm action deletion.')
@@ -325,5 +343,6 @@ class Studio:
         for service in self.services.values():service.task=asyncio.create_task(service.run())
     async def close(self):
         self.running=False
+        await self.repositories.close()
         for service in self.services.values():await service.close()
         await self.discovery.close()

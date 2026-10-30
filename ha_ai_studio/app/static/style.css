@@ -79,3 +79,5 @@ header nav button:hover{background:#0288d1;color:#fff}
 header nav button:active{background:#0277bd}
 header nav button:focus-visible,header .brand:focus-visible{outline:2px solid #fff;outline-offset:-5px}
 @media(max-width:480px){header{padding:0 12px}header .brand{gap:7px;font-size:18px}.brand-logo{width:32px;height:32px}header nav{gap:0}header nav button{padding:10px 12px}}
+
+#environment-panel .panel-body{display:flex;flex-direction:column;min-height:0;overflow:hidden}#environment-log{flex:1;min-height:0;max-height:none;overflow-wrap:normal;overflow:auto;white-space:pre;background:#050805;color:#39ff72;padding:16px;font:13px/1.6 monospace}

@@ -10,3 +10,7 @@ paho-mqtt==2.1.0
 propcache==0.5.4
 typing_extensions==4.16.0
 yarl==1.25.1
+jsonschema==4.23.0
+jsonschema-specifications==2024.10.1
+referencing==0.35.1
+rpds-py==0.22.3

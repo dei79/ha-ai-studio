@@ -4,6 +4,9 @@ import json
 import tempfile
 import threading
 import uuid
+import sys
+from pathlib import Path
+from app.plugins import manifest
 from unittest.mock import patch
 import paho.mqtt.client as mqtt
 from app.actions import Studio
@@ -67,12 +70,32 @@ async def main():
         await service.deactivate();await send(a_client,'echo/request',{'request_id':'inactive','data':0});await asyncio.sleep(.2);assert 'inactive' not in service.jobs
         await service.save(config,True);await service.publish();await send(a_client,'echo/request',{'request_id':'reactivated','data':42});assert (await response('reactivated'))['data']==42
         await idle(service);await studio.delete({'id':'echo','confirmed':True});await send(a_client,'echo/request',{'request_id':'deleted','data':0});await asyncio.sleep(.1);assert 'deleted' not in service.jobs
-        await studio.close()
+        # A real dynamically installed Git type follows the same MQTT durability path.
+        dest=studio.repositories.store.root/'sources'/'synthetic'/'actions'/'sample';dest.mkdir(parents=True)
+        (dest/'action.py').write_text('async def execute(data, settings):\n return data\n')
+        (dest/'requirements.lock').write_text('')
+        (dest/'action.json').write_text(json.dumps({'id':'sample','name':'Synthetic','description':'Isolated MQTT fixture','version':'1','python':f'{sys.version_info.major}.{sys.version_info.minor}','entrypoint':'action.py','settings_schema':{'type':'object'}}))
+        record={'type':'git-test-sample','repository_id':'test','commit':'a'*40,'snapshot':'synthetic','directory':'actions/sample','manifest':manifest(dest)}
+        catalog={'repositories':[{'id':'test','url':'https://example.invalid/test.git','ref':'main','status':'Ready','actions':[record],'logs':[]}]}
+        studio.repositories.state=catalog;studio.repositories.store.write('catalog.json',catalog)
+        await studio.create({'id':'dynamic','name':'Dynamic','type':record['type']});dynamic=studio.get('dynamic');await dynamic.environment.task
+        assert dynamic.environment.ready,dynamic.environment.state
+        conf=dynamic.config['draft'];conf['input']={'broker_id':a,'topic':'echo/request'};conf['output']={'broker_id':b,'topic':'echo/result'}
+        await dynamic.save(conf,True);await dynamic.publish()
+        for n,data in enumerate([None,False,0,'text',[],{'x':[1,True]}]):
+            ident='git-'+str(n);await send(a_client,'echo/request',{'request_id':ident,'data':data});assert (await response(ident))['data']==data
+        await idle(dynamic)
+        await send(a_client,'echo/request',{'request_id':'git-5','data':{'x':[1,True]}});assert (await response('git-5'))['status']=='success'
+        await send(a_client,'echo/request',{'request_id':'git-5','data':False});assert (await response('git-5'))['error']['code']=='request_id_conflict'
+        await send(a_client,'echo/request',{'request_id':'git-retained','data':0},True);await asyncio.sleep(.2);assert 'git-retained' not in dynamic.jobs
+        await idle(dynamic);await studio.close();studio=Studio(root);dynamic=studio.get('dynamic');await studio.start();await dynamic.publish()
+        await send(a_client,'echo/request',{'request_id':'git-5','data':{'x':[1,True]}});assert (await response('git-5'))['status']=='success'
+        await idle(dynamic);await dynamic.deactivate();await studio.close()
         assert not any(host=='broker' and topic=='echo/result' for host,topic,_,_ in seen)
         assert not any('/internal/' in topic for _,topic,_,_ in seen)
         before=len(seen);await observe('broker');await observe('broker2');await asyncio.sleep(.3)
         assert not any(topic=='echo/result' for _,topic,_,_ in seen[before:]),'Results must not be retained'
     for client in clients:client.disconnect();await asyncio.to_thread(client.loop_stop)
-    print('PASS: Echo across brokers A/B; all JSON types; duplicate/conflict; invalid JSON; retained rejection; restart; delivery failure/retry; draft test isolation; deactivate/reactivate/delete; no internal workflow topics or retained results.')
+    print('PASS: Git action venv + async runner across brokers, restart, deduplication/conflict and retained rejection; Echo across brokers A/B; all JSON types; duplicate/conflict; invalid JSON; retained rejection; restart; delivery failure/retry; draft test isolation; deactivate/reactivate/delete; no internal workflow topics or retained results.')
 
 asyncio.run(main())
