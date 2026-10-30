@@ -1,0 +1,56 @@
+name: Release container
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.repository == 'dei79/ha-ai-studio'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release version and image destination
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/release_metadata.py --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
+      - name: Build amd64 image and run unit/API/package tests
+        env:
+          BUILD_VERSION: ${{ steps.metadata.outputs.version }}
+        run: ./scripts/test.sh
+      - name: MQTT integration tests
+        run: ./scripts/test-mqtt.sh
+      - name: TLS and topic permissions
+        run: ./scripts/test-mqtt-security.sh
+      - name: Security checks on the tested image
+        run: ./scripts/security-check.sh
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+      - name: Publish the exact tested image
+        env:
+          TARGET: ${{ steps.metadata.outputs.target }}
+        run: |
+          docker tag ha-ai-studio:dev "$TARGET"
+          docker push "$TARGET"
+          echo "Published: $TARGET (linux/amd64)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

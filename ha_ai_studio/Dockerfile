@@ -13,3 +13,16 @@ COPY LICENSE THIRD_PARTY.md ./
 COPY app ./app
 EXPOSE 8099
 CMD ["python", "-m", "app.server"]
+
+ARG BUILD_VERSION=dev
+ARG BUILD_REVISION=unknown
+LABEL org.opencontainers.image.title="HA AI Studio" \
+      org.opencontainers.image.source="https://github.com/dei79/ha-ai-studio" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${BUILD_VERSION}" \
+      org.opencontainers.image.revision="${BUILD_REVISION}" \
+      io.hass.name="HA AI Studio" \
+      io.hass.description="Configured MQTT actions for Home Assistant automations" \
+      io.hass.type="addon" \
+      io.hass.version="${BUILD_VERSION}" \
+      io.hass.arch="amd64"

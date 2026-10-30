@@ -1,7 +1,11 @@
 name: ha-ai-studio
 services:
   studio:
-    build: ./ha_ai_studio
+    build:
+      context: ./ha_ai_studio
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_REVISION: ${BUILD_REVISION:-unknown}
     image: ha-ai-studio:dev
     platform: linux/amd64
     environment:

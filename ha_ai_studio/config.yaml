@@ -1,5 +1,5 @@
 name: HA AI Studio
-version: "0.11.0"
+version: "0.0.1"
 slug: ha_ai_studio
 description: Configured MQTT actions for Home Assistant automations
 arch: [amd64]
@@ -17,3 +17,6 @@ services:
 options: {}
 schema: {}
 license: MIT
+image: ghcr.io/dei79/ha-ai-studio
+url: https://github.com/dei79/ha-ai-studio
+stage: experimental

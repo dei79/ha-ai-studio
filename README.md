@@ -16,7 +16,13 @@ Optional **Settings → edit broker → Enable MQTT Discovery** announces Studio
 
 ## Install
 
-Run `python3 scripts/package.py` to generate the current source-installable amd64 HA app package in `dist/`. Generated packages are not source files and can be recreated. Extract `ha_ai_studio` into HA's local apps directory, refresh local apps and install HA AI Studio. Open through Ingress. The app slug is `ha_ai_studio`. Nothing is published or installed in your live HA by this development build.
+After the first successful container release, add `https://github.com/dei79/ha-ai-studio` under **Settings → Apps → Install app → ⋮ → Repositories**, then install **HA AI Studio** and open its web UI through Ingress. This requires Home Assistant with Supervisor on amd64. The repository and GHCR package must be public for installation without registry credentials. The app is marked experimental; currently only Echo is available.
+
+Home Assistant pulls `ghcr.io/dei79/ha-ai-studio:<version>` using the version in `ha_ai_studio/config.yaml`; it does not build the image on the device. Before the first successful tag workflow, that image does not exist. Repository metadata can become visible before a tag build finishes, so announce an update only after publication succeeds.
+
+`python3 scripts/package.py` also creates an archive in `dist/`. To build that source locally inside HA instead of pulling the released image, extract `ha_ai_studio` into HA's local apps directory and remove the `image:` line from the extracted `config.yaml` before refreshing/installing. The source slug is `ha_ai_studio`; repository and local installations may have different full app IDs and data locations. Back up data before switching. Nothing is installed in live HA by local development commands.
+
+See [release instructions](docs/RELEASING.md).
 
 Existing Agents are shown as **Unsupported · Disabled**. Their files, identities and credentials remain intact; create a new Echo Action explicitly. They are not converted. Deletion removes an Action from the active registry and stops subscriptions but retains files and reserves its ID; there is no restore UI.
 
@@ -57,7 +63,7 @@ MIT — see [LICENSE](LICENSE). Third-party notices are listed in [THIRD_PARTY.m
 
 ## Automated checks
 
-GitHub Actions runs unit/API tests, isolated MQTT integration tests, TLS and publish-ACL checks, reproducible packaging checks, full-history and working-tree secret scans, Python dependency auditing, and container vulnerability scanning. Security scanner images and checkout are pinned to immutable identifiers. Python advisories and High/Critical container findings fail the checks; scanner failures also fail closed. No publishing or deployment is configured.
+GitHub Actions runs unit/API tests, isolated MQTT integration tests, TLS and publish-ACL checks, reproducible packaging checks, full-history and working-tree secret scans, Python dependency auditing, and container vulnerability scanning. Security scanner images and checkout are pinned to immutable identifiers. Python advisories and High/Critical container findings fail the checks; scanner failures also fail closed. The separate release workflow publishes a versioned GHCR image only when a `vMAJOR.MINOR.PATCH` tag is pushed. It never deploys to Home Assistant.
 
 The security check downloads public advisory databases and requires Internet access. All MQTT integration checks use disposable containers, generated test certificates and synthetic credentials. They never use `.env` or `.dev-data`.
 
