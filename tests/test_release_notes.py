@@ -26,7 +26,8 @@ class ReleaseNotesTests(unittest.TestCase):
             notes.changelog_section(text, '1.2.4')
 
     def test_no_key_uses_maintained_changelog_and_installation(self):
-        body, mode = self.render()
+        with contextlib.redirect_stdout(io.StringIO()):
+            body, mode = self.render()
         self.assertEqual(mode, 'changelog')
         for expected in ('Only Echo', 'Experimental pre-release', 'amd64', 'compare/v1.2.2...v1.2.3', 'ghcr.io/example/studio:1.2.3'):
             self.assertIn(expected, body)
@@ -63,8 +64,11 @@ class ReleaseNotesTests(unittest.TestCase):
             json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'refusal', 'refusal': 'No'}]}]}).encode()]
         for data in cases:
             with self.subTest(data=data):
-                _, mode = self.render('test-secret', lambda *a, **kw: io.BytesIO(data))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    _, mode = self.render('test-secret', lambda *a, **kw: io.BytesIO(data))
                 self.assertEqual(mode, 'changelog')
+                self.assertIn('::warning::AI release notes unavailable', output.getvalue())
 
     def test_git_baseline_first_release_and_previous_tag(self):
         # The unit-test container intentionally has no Git binary.
