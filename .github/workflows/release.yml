@@ -1,4 +1,4 @@
-name: Release container
+name: Release container and notes
 on:
   push:
     tags:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       BUILD_REVISION: ${{ github.sha }}
@@ -29,6 +29,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: python3 scripts/release_metadata.py --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
+      - name: Test release tooling including Git history ranges
+        run: python3 -m unittest discover -s tests -p 'test_release*.py' -v
       - name: Build amd64 image and run unit/API/package tests
         env:
           BUILD_VERSION: ${{ steps.metadata.outputs.version }}
@@ -39,6 +41,14 @@ jobs:
         run: ./scripts/test-mqtt-security.sh
       - name: Security checks on the tested image
         run: ./scripts/security-check.sh
+      - name: Prepare release notes
+        id: notes
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_RELEASE_MODEL: ${{ vars.OPENAI_RELEASE_MODEL }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/release_notes.py --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY" --output "$RUNNER_TEMP/release-notes.md"
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,6 +61,18 @@ jobs:
           docker tag ha-ai-studio:dev "$TARGET"
           docker push "$TARGET"
           echo "Published: $TARGET (linux/amd64)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "HA AI Studio $RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md" "${flags[@]}"
       - name: Log out of GHCR
         if: always()
         run: docker logout ghcr.io

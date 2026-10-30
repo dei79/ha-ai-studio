@@ -63,7 +63,7 @@ MIT — see [LICENSE](LICENSE). Third-party notices are listed in [THIRD_PARTY.m
 
 ## Automated checks
 
-GitHub Actions runs unit/API tests, isolated MQTT integration tests, TLS and publish-ACL checks, reproducible packaging checks, full-history and working-tree secret scans, Python dependency auditing, and container vulnerability scanning. Security scanner images and checkout are pinned to immutable identifiers. Python advisories and High/Critical container findings fail the checks; scanner failures also fail closed. The separate release workflow publishes a versioned GHCR image only when a `vMAJOR.MINOR.PATCH` tag is pushed. It never deploys to Home Assistant.
+GitHub Actions runs unit/API tests, isolated MQTT integration tests, TLS and publish-ACL checks, reproducible packaging checks, full-history and working-tree secret scans, Python dependency auditing, and container vulnerability scanning. Security scanner images and checkout are pinned to immutable identifiers. Python advisories and High/Critical container findings fail the checks; scanner failures also fail closed. The separate release workflow publishes a versioned GHCR image only when a `vMAJOR.MINOR.PATCH` tag is pushed. After the image push, it creates a GitHub Release with AI-assisted English notes and the maintained changelog (changelog fallback if OpenAI is unavailable). See [release setup](docs/RELEASING.md) for the `OPENAI_API_KEY` Actions secret. It never deploys to Home Assistant.
 
 The security check downloads public advisory databases and requires Internet access. All MQTT integration checks use disposable containers, generated test certificates and synthetic credentials. They never use `.env` or `.dev-data`.
 

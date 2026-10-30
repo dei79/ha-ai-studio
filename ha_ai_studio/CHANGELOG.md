@@ -1,3 +1,12 @@
+## 0.0.2
+
+- Add app store branding with an icon, logo and an introduction to AI Actions.
+- Generate English release summaries and highlights using OpenAI, with the maintained changelog as a fallback when the API is unavailable or not configured.
+- Publish GitHub Releases after successful container publication, including installation instructions and a link to the source changes.
+- Mark experimental releases as pre-releases and document secure API key configuration through GitHub Actions secrets.
+
+The app remains experimental and amd64-only. Echo is the only implemented Action type; AI release-note generation runs in CI, not in the application.
+
 ## 0.0.1
 
 First experimental release of HA AI Studio.
