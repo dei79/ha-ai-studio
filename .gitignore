@@ -1,0 +1,18 @@
+.dev-data/
+.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+test-results/
+dist/
+*.pyc
+.playwright-mcp/
+
+# Local credentials (only the placeholder template is publishable)
+.env
+.env.*
+!.env.example
+
+# Generated browser captures and OS metadata
+.DS_Store
+docs/ui-*.png

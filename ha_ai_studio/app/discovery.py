@@ -1,0 +1,234 @@
+"""Optional central MQTT discovery with durable, exact-topic ownership."""
+import asyncio
+import copy
+import hashlib
+import json
+from .domain import Invalid
+from .mqtt import MQTT
+
+VERSION = '0.11.0'
+DEFAULT = {'enabled': False, 'broker_id': None, 'prefix': 'homeassistant', 'ha_status_topic': 'homeassistant/status'}
+
+
+class Discovery:
+    def __init__(self, studio):
+        self.studio = studio
+        self.store = studio.store
+        self.brokers = studio.brokers
+        self.data = self.store.read('discovery.json')
+        if self.data is None:
+            self.data = {'config': dict(DEFAULT), 'owned': [], 'authorized': False}
+            # Earlier versions announced one status entity on the input broker.
+            # Record only exact known topics; reconcile after an explicit settings save.
+            for service in studio.services.values():
+                active = (service.config or {}).get('active')
+                if active:
+                    broker = active['input']['broker_id']
+                    if broker:
+                        prefix = service.identity['prefix']
+                        self.data['owned'].append({'broker_id': broker, 'endpoint': None, 'topics': [
+                            f'homeassistant/sensor/{prefix}/status/config', prefix+'/status', prefix+'/receiver']})
+            self.persist()
+        self.lock = asyncio.Lock()
+        self.client = None
+        self.connection = None
+        self.task = None
+        self.stopping = False
+        self.status = 'Disabled'
+        self.sent = {}
+        self.birth = False
+
+    def persist(self):
+        try:
+            self.store.write('discovery.json', self.data)
+        except Exception:
+            self.data = self.store.read('discovery.json', {'config': dict(DEFAULT), 'owned': [], 'authorized': False})
+            raise
+
+    def references_broker(self, broker):
+        return (self.data['config']['broker_id'] == broker or
+                any(item['broker_id'] == broker for item in self.data['owned']))
+
+    def public(self):
+        desired = self.desired() if self.data['config']['enabled'] else {}
+        selected = self.data['config']['broker_id']
+        try: endpoint = self.fingerprint(selected)
+        except Invalid: endpoint = None
+        pending = sum(len(set(item['topics']) - (set(desired) if item['broker_id'] == selected and item['endpoint'] in (None, endpoint) else set())) for item in self.data['owned'])
+        return {'config': copy.deepcopy(self.data['config']), 'status': self.status, 'instance_id': self.studio.instance_id,
+                'pending_cleanup': pending, 'legacy_pending': not self.data['authorized'] and bool(self.data['owned'])}
+
+    async def save(self, value):
+        if not isinstance(value, dict) or set(value) != set(DEFAULT) or type(value['enabled']) is not bool:
+            raise Invalid('Provide discovery enabled, broker, prefix and Home Assistant status topic.')
+        for key in ('prefix', 'ha_status_topic'):
+            text = value[key]
+            if not isinstance(text, str) or not text or len(text.encode()) > 128 or text.startswith('$') or any(c in text for c in '#+\x00') or any(ord(c) < 32 for c in text) or text.endswith('/'):
+                raise Invalid('Use concrete discovery topics without wildcards or a trailing slash.')
+        if value['broker_id'] is not None and not isinstance(value['broker_id'], str):
+            raise Invalid('Select a discovery broker.')
+        async with self.brokers.lock:
+            if value['enabled'] or (value['broker_id'] is not None and not self.references_broker(value['broker_id'])):
+                self.brokers.get(value['broker_id'])
+            async with self.lock:
+                previous = self.data['config']
+                self.data['config'] = copy.deepcopy(value)
+                try:
+                    self.brokers.check_topology()
+                    if value['ha_status_topic'] in self.desired():raise Invalid('Home Assistant status topic must not be a Studio-owned topic.')
+                except Exception:
+                    self.data['config'] = previous
+                    raise
+                await self.disconnect()
+                self.data['authorized'] = True
+                self.persist()
+                self.status = 'Applying settings; cleanup will be retried if necessary'
+        return self.public()
+
+    def desired(self):
+        config = self.data['config']
+        identity = self.store.read('identity.json')
+        namespace = identity['prefix']
+        availability = namespace+'/discovery/availability'
+        device = {'identifiers': [identity['device_id']], 'name': 'HA AI Studio · '+self.studio.instance_id,
+                  'manufacturer': 'HA AI Studio', 'model': 'Local action service', 'sw_version': VERSION}
+        result = {}
+
+        def sensor(prefix, key, name, state_topic, value, dev):
+            result[f"{config['prefix']}/sensor/{prefix}/{key}/config"] = {
+                'name': name, 'unique_id': prefix+'_'+key, 'device': dev,
+                'state_topic': state_topic, 'availability_topic': availability,
+                'entity_category': 'diagnostic'}
+            result[state_topic] = str(value)
+
+        sensor(namespace, 'active_actions', 'Active actions', namespace+'/discovery/active_actions',
+               sum(bool(s.enabled) for s in self.studio.services.values()), device)
+        for service in self.studio.services.values():
+            if not service.supported:
+                continue
+            prefix = service.identity['prefix']
+            action_device = {'identifiers': [service.identity['device_id']],
+                'name': 'HA AI Studio · '+self.studio.instance_id+' · '+service.config['draft']['name'], 'manufacturer': 'HA AI Studio',
+                'model': 'Configured '+service.type+' action', 'sw_version': VERSION, 'via_device': identity['device_id']}
+            if action_device['identifiers'] == device['identifiers']:
+                action_device = device  # Preserve a legacy root device without a self via_device link.
+            last = service.last or {}
+            execution = 'disabled' if not service.enabled else 'running' if service.running else last.get('execution', 'idle')
+            execution = {'processing': 'interrupted'}.get(execution, execution)
+            if execution not in ('disabled', 'idle', 'running', 'success', 'error', 'interrupted'): execution = 'error'
+            delivery = last.get('delivery', 'not_sent')
+            if delivery not in ('not_sent', 'pending', 'published', 'failed', 'unknown'): delivery = 'unknown'
+            sensor(prefix, 'status', 'Action status', prefix+'/status', execution, action_device)
+            sensor(prefix, 'delivery', 'MQTT delivery', prefix+'/delivery', delivery, action_device)
+        result[availability] = 'online'
+        return result
+
+    def check_routes(self, route):
+        config = self.data['config']
+        targets = [(i['broker_id'], set(i['topics'])) for i in self.data['owned']]
+        if config['enabled']:
+            targets.append((config['broker_id'], set(self.desired()) | {config['ha_status_topic']}))
+        for broker, topics in targets:
+            for side, key in (('input_broker', 'request_topic'), ('output_broker', 'result_topic')):
+                if self.brokers.endpoint(route[side]) == self.brokers.endpoint(broker) and route[key] in topics:
+                    raise Invalid('Action topics must not overlap discovery, diagnostic or Home Assistant status topics on this broker.')
+
+    def fingerprint(self, broker):
+        return self.settings_fingerprint(self.brokers.get(broker)['settings'])
+
+    @staticmethod
+    def settings_fingerprint(settings):
+        conf = settings['mqtt']
+        # No credentials or addresses in browser responses; endpoint guard prevents wrong-server cleanup.
+        return hashlib.sha256(json.dumps([conf['host'].lower().rstrip('.'), conf['port'], conf['tls']]).encode()).hexdigest()
+
+    async def disconnect(self):
+        if self.client:
+            await asyncio.to_thread(self.client.close)
+        self.client = None
+        self.connection = None
+        self.sent = {}
+
+    async def reconcile(self):
+        async with self.brokers.lock:
+            async with self.lock:
+                if not self.data['authorized']:return
+                config = self.data['config']
+                self.brokers.check_topology()
+                desired = self.desired() if config['enabled'] else {}
+                broker = config['broker_id']
+                # Clean old ownership before announcing new state. Never wildcard-delete.
+                for item in list(self.data['owned']):
+                    try: current_endpoint = self.fingerprint(broker) if config['enabled'] else None
+                    except Invalid: current_endpoint = None
+                    same_target = bool(config['enabled'] and current_endpoint and item['broker_id'] == broker and item['endpoint'] in (None, current_endpoint))
+                    obsolete = set(item['topics']) - (set(desired) if same_target else set())
+                    if not obsolete:continue
+                    cleanup_settings = self.brokers.cleanup_settings(item['broker_id'], item['endpoint'])
+                    await self.disconnect()
+                    probe = MQTT({'prefix': self.studio.namespace+'_cleanup', 'device_id': 'cleanup'}, lambda _: None, subscribe=False)
+                    try:
+                        await asyncio.to_thread(probe.connect, cleanup_settings)
+                        for topic in sorted(obsolete, key=lambda t: (not t.endswith('/config'), t)):
+                            await asyncio.to_thread(probe.publish, topic, '', absolute=True, retain=True)
+                            item['topics'].remove(topic)
+                            self.persist()
+                    finally:
+                        await asyncio.to_thread(probe.close)
+                    if not item['topics']:
+                        self.data['owned'].remove(item)
+                        self.persist()
+                if not config['enabled']:
+                    await self.disconnect()
+                    self.brokers.prune_cleanup(self.data['owned'])
+                    self.status = 'Disabled · owned discovery messages cleared'
+                    return
+                fingerprint = self.fingerprint(broker)
+                record = next((i for i in self.data['owned'] if i['broker_id'] == broker), None)
+                if record and record['endpoint'] and record['endpoint'] != fingerprint:
+                    raise Invalid('Restore the previous broker endpoint to finish cleanup.')
+                if not record:
+                    record = {'broker_id': broker, 'endpoint': fingerprint, 'topics': []}
+                    self.data['owned'].append(record)
+                endpoint_changed = record['endpoint'] != fingerprint
+                record['endpoint'] = fingerprint
+                self.brokers.pin_cleanup(broker, fingerprint)
+                topics = sorted(set(record['topics']) | set(desired))
+                if topics != record['topics'] or endpoint_changed:
+                    record['topics'] = topics
+                    self.persist()  # Write ownership BEFORE publication, including partial failures.
+                settings = self.brokers.get(broker)['settings']
+                signature = json.dumps(settings, sort_keys=True)
+                if not self.client or self.connection != signature:
+                    await self.disconnect()
+                    loop = asyncio.get_running_loop()
+                    def birth(payload):
+                        if payload == b'online':loop.call_soon_threadsafe(setattr, self, 'birth', True)
+                    self.client = MQTT({'prefix': self.studio.namespace+'_discovery', 'device_id': self.studio.namespace,
+                        'request_topic': config['ha_status_topic'], 'accept_retained': True,
+                        'availability_topic': self.studio.namespace+'/discovery/availability'}, birth)
+                    await asyncio.to_thread(self.client.connect, settings)
+                    self.connection = signature
+                if not self.client.ready.is_set():raise Invalid('Discovery is reconnecting.')
+                if self.client.needs_discovery or self.birth:
+                    self.sent = {};self.birth = False;self.client.needs_discovery = False
+                for topic, payload in desired.items():
+                    if self.sent.get(topic) != payload:
+                        await asyncio.to_thread(self.client.publish, topic, payload, absolute=True, retain=True)
+                        self.sent[topic] = copy.deepcopy(payload)
+                self.status = 'Connected · discovery published'
+                self.brokers.prune_cleanup(self.data['owned'])
+
+    async def run(self):
+        while not self.stopping:
+            try:await self.reconcile()
+            except Exception:
+                self.status = 'Connection or publication failed · pending cleanup is retained; check broker access and original endpoint'
+                async with self.lock:await self.disconnect()
+            await asyncio.sleep(0.5)
+
+    async def close(self):
+        self.stopping = True
+        # Let in-flight thread operations finish before disconnecting (no orphan publisher).
+        if self.task:await self.task
+        async with self.lock:await self.disconnect()

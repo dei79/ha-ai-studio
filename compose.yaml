@@ -1,0 +1,29 @@
+name: ha-ai-studio
+services:
+  studio:
+    build: ./ha_ai_studio
+    image: ha-ai-studio:dev
+    platform: linux/amd64
+    environment:
+      DEV_MQTT_HOST: ${DEV_MQTT_HOST:-}
+      DEV_MQTT_PORT: ${DEV_MQTT_PORT:-1883}
+      DEV_MQTT_USERNAME: ${DEV_MQTT_USERNAME:-}
+      DEV_MQTT_PASSWORD: ${DEV_MQTT_PASSWORD:-}
+      DEV_MQTT_TLS: ${DEV_MQTT_TLS:-false}
+      HA_AI_STUDIO_DATA: /data
+      HA_AI_STUDIO_DEV: '1'
+    ports:
+      - '127.0.0.1:8099:8099'
+    volumes:
+      - ./.dev-data:/data
+  ingress:
+    image: ha-ai-studio:dev
+    platform: linux/amd64
+    profiles: [ingress]
+    command: ['python', '/dev-tools/ingress_proxy.py']
+    ports:
+      - '127.0.0.1:8100:8100'
+    volumes:
+      - ./scripts:/dev-tools:ro
+    depends_on:
+      - studio

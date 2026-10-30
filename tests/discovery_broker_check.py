@@ -1,0 +1,151 @@
+"""Isolated real MQTT A/B/C checks; not a Home Assistant installation test."""
+import asyncio
+import copy
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+import paho.mqtt.client as mqtt
+from app.actions import Studio
+from app.discovery import DEFAULT
+from test_actions import broker
+
+
+async def main():
+    clients=[];seen=[];loop=asyncio.get_running_loop()
+    async def observe(host):
+        ready=threading.Event()
+        client=mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,client_id='observer-'+uuid.uuid4().hex,protocol=mqtt.MQTTv5)
+        client.on_connect=lambda c,*_:c.subscribe('#',options=mqtt.SubscribeOptions(qos=1,retainAsPublished=True))
+        client.on_subscribe=lambda *_:ready.set()
+        client.on_message=lambda c,u,m:loop.call_soon_threadsafe(seen.append,(host,m.topic,m.payload,m.retain))
+        await asyncio.to_thread(client.connect,host,1883);client.loop_start()
+        assert await asyncio.to_thread(ready.wait,5)
+        clients.append(client);return client
+    async def until(check):
+        for _ in range(400):
+            if check():return
+            await asyncio.sleep(.025)
+        raise AssertionError('Expected MQTT state was not observed')
+    async def publish(client,topic,payload,retain=False):
+        result=client.publish(topic,payload,qos=1,retain=retain)
+        await asyncio.to_thread(result.wait_for_publish,5)
+    a=await observe('broker');b=await observe('broker2');c=await observe('broker3')
+    with tempfile.TemporaryDirectory() as root:
+        studio=Studio(root)
+        ids=[]
+        for host in ['broker','broker2','broker3']:
+            before=set(studio.brokers.all());await studio.brokers.save(broker(host));ids.append((set(studio.brokers.all())-before).pop())
+        await studio.create({'id':'echo','name':'Echo','type':'echo'})
+        service=studio.get('echo');prefix=service.identity['prefix'];namespace=studio.namespace
+        config=copy.deepcopy(service.config['draft']);config['input']={'broker_id':ids[0],'topic':'discovery-check/request'};config['output']={'broker_id':ids[1],'topic':'discovery-check/result'}
+        await service.save(config,True)
+        await studio.discovery.save({**DEFAULT,'enabled':True,'broker_id':ids[2]})
+        await studio.start()
+        status=f'homeassistant/sensor/{prefix}/status/config';availability=namespace+'/discovery/availability'
+        await until(lambda:any(h=='broker3' and t==availability and p==b'online' for h,t,p,r in seen))
+        assert not any(h!='broker3' and (t.startswith('homeassistant/') or t==prefix+'/status') for h,t,p,r in seen)
+        configs={t:json.loads(p) for h,t,p,r in seen if h=='broker3' and t.endswith('/config') and p}
+        assert len(configs)==3
+        assert configs[status]['unique_id']==prefix+'_status'
+        await until(lambda:service.mqtt and service.mqtt.ready.is_set())
+        await publish(a,'discovery-check/request',json.dumps({'request_id':'production','data':{'private':'DO-NOT-ANNOUNCE'}}))
+        await until(lambda:service.last and service.last['delivery']=='published')
+        await until(lambda:any(t==prefix+'/delivery' and p==b'published' for h,t,p,r in seen))
+        assert not any(b'DO-NOT-ANNOUNCE' in p for h,t,p,r in seen if h=='broker3')
+        before=copy.deepcopy(service.last);await service.test(config,'{"request_id":"ui","data":0}')
+        assert before==service.last
+        assert any(h=='broker2' and t=='discovery-check/result' and not r for h,t,p,r in seen)
+        # A retained HA birth is accepted, unlike Action requests; replay both config and state.
+        birth_start=len(seen)
+        count=sum(t==status for h,t,p,r in seen)
+        await publish(c,'homeassistant/status','online',True)
+        await until(lambda:sum(t==status for h,t,p,r in seen)>count)
+        count=sum(t==status for h,t,p,r in seen)
+        await until(lambda:any(t==prefix+'/status' and p==b'success' for h,t,p,r in seen[birth_start:]))
+        reconnect_start=len(seen)
+        # Force an actual TCP loss. Paho reconnects and the manager republishes.
+        await asyncio.to_thread(studio.discovery.client.client._sock_close)
+        await until(lambda:sum(t==status for h,t,p,r in seen)>count)
+        await until(lambda:any(t==prefix+'/status' and p==b'success' for h,t,p,r in seen[reconnect_start:]))
+        config['name']='Renamed';await service.save(config,False)
+        await until(lambda:any(t==status and b'Renamed' in p for h,t,p,r in seen))
+        await service.deactivate()
+        await until(lambda:any(t==prefix+'/status' and p==b'disabled' for h,t,p,r in seen))
+        close_start=len(seen)
+        await studio.close()
+        await until(lambda:any(t==availability and p==b'offline' for h,t,p,r in seen[close_start:]))
+        studio=Studio(root);service=studio.get('echo');await studio.start()
+        await until(lambda:studio.discovery.status.startswith('Connected'))
+        assert studio.discovery.desired()[status]['unique_id']==configs[status]['unique_id']
+        await studio.delete({'id':'echo','confirmed':True})
+        await until(lambda:any(t==status and p==b'' for h,t,p,r in seen))
+        # Switch to B, verify old broker clears only our topics and Studio exists with zero Actions.
+        await publish(c,'foreign/keep','untouched',True)
+        await studio.discovery.save({**DEFAULT,'enabled':True,'broker_id':ids[1]})
+        await until(lambda:studio.discovery.status.startswith('Connected') and all(i['broker_id']==ids[1] for i in studio.discovery.data['owned']))
+        assert not any(t=='foreign/keep' and p==b'' for h,t,p,r in seen)
+        await studio.discovery.save(dict(DEFAULT))
+        await until(lambda:not studio.discovery.data['owned'])
+        await studio.close()
+        # A fresh observer receives neither deleted configs nor retained results.
+        start=len(seen);await observe('broker2');await observe('broker3');await asyncio.sleep(.3)
+        assert not any((t.endswith('/config') or t=='discovery-check/result') and p for h,t,p,r in seen[start:])
+    # A real TCP proxy lets us make the old isolated broker unreachable without Docker privileges.
+    streams=set()
+    async def relay(reader,writer):
+        upstream,output=await asyncio.open_connection('broker3',1883)
+        streams.update((writer,output))
+        async def pump(source,destination):
+            try:
+                while chunk:=await source.read(65536):destination.write(chunk);await destination.drain()
+            finally:destination.close()
+        try:await asyncio.gather(pump(reader,output),pump(upstream,writer))
+        except (OSError,ConnectionError):pass
+        finally:streams.discard(writer);streams.discard(output)
+    proxy=await asyncio.start_server(relay,'127.0.0.1',28883)
+    with tempfile.TemporaryDirectory() as root:
+        studio=Studio(root)
+        old=(await studio.brokers.save({**broker('127.0.0.1'),'port':28883}))['brokers'][0]['id']
+        before=set(studio.brokers.all());await studio.brokers.save(broker('broker2'));new=(set(studio.brokers.all())-before).pop()
+        await studio.discovery.save({**DEFAULT,'enabled':True,'broker_id':old})
+        await studio.discovery.reconcile();await studio.discovery.disconnect()
+        proxy.close();await proxy.wait_closed()
+        for writer in list(streams):writer.close()
+        await studio.discovery.save({**DEFAULT,'enabled':True,'broker_id':new})
+        try:await studio.discovery.reconcile();raise AssertionError('Old broker should be unreachable')
+        except OSError:pass
+        assert studio.discovery.public()['pending_cleanup']>0
+        await studio.close()
+        studio=Studio(root)
+        assert studio.discovery.public()['pending_cleanup']>0
+        proxy=await asyncio.start_server(relay,'127.0.0.1',28883)
+        await studio.discovery.reconcile()
+        assert studio.discovery.public()['pending_cleanup']==0
+        assert all(item['broker_id']==new for item in studio.discovery.data['owned'])
+        await studio.discovery.save(dict(DEFAULT));await studio.discovery.reconcile();await studio.close()
+    proxy.close();await proxy.wait_closed()
+    # Abrupt process death exercises the broker's real LWT, separate from clean close.
+    code="""import time
+from app.mqtt import MQTT
+c=MQTT({'prefix':'isolated-will','device_id':'will','availability_topic':'isolated/will'},lambda _:None,subscribe=False)
+c.connect({'mqtt':{'mode':'manual','host':'broker3','port':1883}})
+c.publish('isolated/will','online',absolute=True)
+print('ready',flush=True)
+time.sleep(60)
+"""
+    child=subprocess.Popen([sys.executable,'-c',code],stdout=subprocess.PIPE,text=True)
+    try:
+        assert await asyncio.to_thread(child.stdout.readline)=='ready\n'
+        child.kill();await asyncio.to_thread(child.wait)
+        await until(lambda:any(t=='isolated/will' and p==b'offline' for h,t,p,r in seen))
+    finally:
+        if child.poll() is None:child.kill();child.wait()
+    for client in clients:client.disconnect();await asyncio.to_thread(client.loop_stop)
+    print('PASS: real isolated A/B/C; central discovery; stable IDs; HA birth; TCP reconnect; restart; clean offline and hard-kill LWT; rename/deactivate/delete; broker switch/off; UI test isolation; private payload exclusion; no retained results; foreign topics preserved.')
+
+asyncio.run(main())
