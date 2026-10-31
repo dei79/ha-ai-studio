@@ -18,6 +18,7 @@ import uuid
 import weakref
 from .domain import Invalid, stamp
 from .store import Store
+from .releases import fetch_release, repository_url
 
 DEFAULT_REPOSITORY_URL = 'https://github.com/ha-ai-studio/ha-ai-studio-actions-core.git'
 DEFAULT_REPOSITORY_REF = 'main'
@@ -227,10 +228,16 @@ class Repositories:
         return path
     async def save(self,value):
         local=isinstance(value,dict) and value.get('kind')=='local'
+        release=isinstance(value,dict) and value.get('kind')=='release'
         if local:
             if set(value)!={'kind','path'}:raise Invalid('Provide a local directory.')
             path=self.local_source(value['path'])
             url=str(path.relative_to(self.local_root));ref='local'
+        elif release:
+            if set(value)!={'kind','url','ref'}:raise Invalid('Provide repository URL and release tag or latest.')
+            url=repository_url(value['url']);ref=value['ref']
+            if not isinstance(ref,str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/\-]{0,127}',ref) or '..' in ref:
+                raise Invalid('Provide a release tag or latest.')
         else:
             if not isinstance(value,dict) or set(value)!={'url','ref'}:raise Invalid('Provide repository URL and Git ref.')
             url=value['url'];ref=value['ref']
@@ -239,9 +246,9 @@ class Repositories:
             if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or any(c.isspace() for c in url):raise Invalid('Provide an HTTPS Git URL without credentials.')
             if not isinstance(ref,str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/\-]{0,127}',ref) or '..' in ref:raise Invalid('Provide a branch, tag or commit.')
         async with self.lock:
-            if any(r['url']==url and r['ref']==ref for r in self.state['repositories']):raise Invalid('Repository and ref already configured.')
+            if any(r['url']==url and r['ref']==ref and r.get('kind','git')==('local' if local else 'release' if release else 'git') for r in self.state['repositories']):raise Invalid('Repository and ref already configured.')
             if len(self.state['repositories'])>=16:raise Invalid('Maximum of 16 repositories.')
-            repo={'id':uuid.uuid4().hex[:16],'kind':'local' if local else 'git','url':url,'ref':ref,'status':'Not synced','actions':[],'logs':[]}
+            repo={'id':uuid.uuid4().hex[:16],'kind':'local' if local else 'release' if release else 'git','url':url,'ref':ref,'status':'Not synced','actions':[],'logs':[]}
             candidate=copy.deepcopy(self.state);candidate['repositories'].append(repo);self.store.write('catalog.json',candidate);self.state=candidate
         self.refresh(repo['id']);return self.public()
     def copy_local(self,source,target):
@@ -309,7 +316,11 @@ class Repositories:
         repo=next(r for r in self.state['repositories'] if r['id']==id)
         try:
             await self.update(id,status='Syncing',logs=['Fetching repository metadata.'])
-            if repo.get('kind')=='local':
+            release_info={}
+            if repo.get('kind')=='release':
+                release_info=await fetch_release(repo['url'],repo['ref'],target)
+                commit=release_info['sha256']
+            elif repo.get('kind')=='local':
                 commit=self.copy_local(self.local_source(repo['url']),target)
             else:
                 await process(['git','init','--quiet',target])
@@ -324,15 +335,15 @@ class Repositories:
                 if not directory.is_dir():continue
                 data=await manifest(directory)
                 if any(a['manifest']['id']==data['id'] for a in actions):raise Invalid('Duplicate action ID in repository.')
-                actions.append({'type':f"git-{id}-{data['id']}",'repository_id':id,'commit':commit,'snapshot':snapshot,'directory':str(directory.relative_to(target)),'manifest':data,'source_kind':repo.get('kind','git')})
+                actions.append({'type':f"git-{id}-{data['id']}",'repository_id':id,'commit':commit,'snapshot':snapshot,'directory':str(directory.relative_to(target)),'manifest':data,'source_kind':repo.get('kind','git'),**({'release':release_info} if release_info else {})})
             if not actions or len(actions)>64:raise Invalid('Repository must contain 1 to 64 actions.')
             shutil.rmtree(target/'.git',ignore_errors=True)
-            await self.update(id,status='Ready',actions=actions,commit=commit,logs=['Repository validated. No action code was executed.'],updated=stamp())
+            await self.update(id,status='Ready',actions=actions,commit=commit,**({'release':release_info} if release_info else {}),logs=['Repository validated. No action code was executed.'],updated=stamp())
         except asyncio.CancelledError:
             shutil.rmtree(target,ignore_errors=True);raise
         except Exception:
             shutil.rmtree(target,ignore_errors=True)
-            await self.update(id,status='Failed',logs=['Repository sync failed. Check source access, Git ref and action manifests. Previous catalog remains available.'])
+            await self.update(id,status='Failed',logs=['Repository sync failed. Check source access, Git ref or stable release package, checksum and action manifests. Previous catalog remains available.'])
         finally:
             self.active_snapshots.discard(snapshot)
             await self.prune_sources()

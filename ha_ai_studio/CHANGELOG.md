@@ -1,3 +1,9 @@
+## 0.0.11
+
+- Add GitHub Release sources with latest stable or explicit stable tag selection.
+- Validate built Action packages and SHA256 checksums before importing immutable snapshots.
+- Preserve installed Action versions across catalog refresh and restart.
+
 ## 0.0.10
 
 - Add Home Assistant entity search and scoped camera/illumination access for Actions.

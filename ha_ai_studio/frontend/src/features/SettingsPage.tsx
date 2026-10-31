@@ -51,7 +51,11 @@ function RepositoryPanel({
           void op.run(async () => {
             await api(
               "repositories",
-              kind === "local" ? { kind, path } : { url, ref },
+              kind === "local"
+                ? { kind, path }
+                : kind === "release"
+                  ? { kind, url, ref }
+                  : { url, ref },
             );
             await saved();
             close();
@@ -59,16 +63,18 @@ function RepositoryPanel({
         }}
       >
         <fieldset disabled={op.busy}>
-          {localAvailable && (
-            <Select
-              label="Source type"
-              value={kind}
-              onChange={(e) => setKind(e.target.value)}
-            >
-              <option value="git">Git repository</option>
-              <option value="local">Local directory</option>
-            </Select>
-          )}
+          <Select
+            label="Source type"
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value);
+              setRef(e.target.value === "release" ? "latest" : "main");
+            }}
+          >
+            <option value="git">Git repository</option>
+            <option value="release">GitHub Release</option>
+            {localAvailable && <option value="local">Local directory</option>}
+          </Select>
           {kind === "local" ? (
             <Input
               label="Local directory"
@@ -80,7 +86,9 @@ function RepositoryPanel({
           ) : (
             <>
               <Input
-                label="Git HTTPS URL"
+                label={
+                  kind === "release" ? "GitHub repository URL" : "Git HTTPS URL"
+                }
                 type="url"
                 required
                 placeholder="https://github.com/owner/actions.git"
@@ -88,7 +96,16 @@ function RepositoryPanel({
                 onChange={(e) => setUrl(e.target.value)}
               />
               <Input
-                label="Branch, tag or commit"
+                label={
+                  kind === "release"
+                    ? "Release tag or latest"
+                    : "Branch, tag or commit"
+                }
+                hint={
+                  kind === "release"
+                    ? "latest downloads the latest stable release on refresh. Existing actions keep their installed version."
+                    : undefined
+                }
                 required
                 maxLength={128}
                 value={ref}
@@ -269,7 +286,7 @@ export function SettingsPage() {
           dependencies; repository code can access files and the network. Public
           HTTPS repositories are supported.{" "}
           {localAvailable &&
-            "Local directories are also available on this server."}
+            "Local directories are also available on this server. "}
           Custom editors run trusted JavaScript in Studio; install only code you
           trust.
         </p>
@@ -291,11 +308,16 @@ export function SettingsPage() {
                 <td>
                   {repo.kind === "local"
                     ? "Local"
-                    : repo.system
-                      ? "System"
-                      : "User"}
+                    : repo.kind === "release"
+                      ? "GitHub Release"
+                      : repo.system
+                        ? "System"
+                        : "User"}
                 </td>
-                <td>{repo.ref}</td>
+                <td>
+                  {repo.ref}
+                  {repo.release ? ` · ${repo.release.tag}` : ""}
+                </td>
                 <td>{repo.status}</td>
                 <td>
                   {repo.actions

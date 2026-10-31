@@ -28,7 +28,7 @@ BROKER={'id':'fixture-broker','name':'Isolated fixture broker','host':'broker.in
 brokers=[BROKER]
 discovery={'config':{'enabled':False,'broker_id':None,'prefix':'homeassistant','ha_status_topic':'homeassistant/status'},'status':'Disabled','pending_cleanup':0,'legacy_pending':False}
 repositories=[]
-METER_ROOT=Path('/fixture-meter/actions/meter-reading')
+METER_ROOT=Path('/fixture-meter/actions/analog-meter-reading')
 LOCAL_PLUGIN=None
 if (METER_ROOT/'action.json').is_file():
     manifest=json.loads((METER_ROOT/'action.json').read_text())
@@ -46,7 +46,7 @@ async def handle(request):
     if path=='action-types/echo/editor.js':return web.FileResponse(Path('/app/app/action_types/legacy_echo/editor.js'))
     if path.startswith('plugin-assets/') and LOCAL_PLUGIN:
         name=path.rsplit('/',1)[-1]
-        if name not in ('editor.js','fields.js'):raise web.HTTPNotFound()
+        if name not in ('editor.js','editor.css','fields.js'):raise web.HTTPNotFound()
         return web.FileResponse(METER_ROOT/'ui'/name)
     if not path.startswith('api/'):raise web.HTTPNotFound()
     body=await request.json() if request.method=='POST' else None
@@ -76,7 +76,9 @@ async def handle(request):
         if body:discovery['config']=body
         return web.json_response(discovery)
     if endpoint=='repositories':
-        if body:repositories.append({'id':'local-fixture','kind':'local','url':body['path'],'ref':'local','status':'Ready','system':False,'refreshing':False,'can_delete':True,'delete_reason':None,'logs':[],'actions':[{'manifest':{'name':'Meter reading example','version':'0.1.0'}}]})
+        if body:
+            kind=body.get('kind','git')
+            repositories.append({'id':'source-fixture','kind':kind,'url':body.get('path',body.get('url')),'ref':body.get('ref','local'),'status':'Ready','system':False,'refreshing':False,'can_delete':True,'delete_reason':None,'logs':[],'actions':[{'manifest':{'name':'Synthetic action','version':'1.0.0'}}],**({'release':{'tag':'v1.0.0','release_id':1,'sha256':'a'*64}} if kind=='release' else {})})
         return web.json_response({'repositories':repositories,'local_available':LOCAL_PLUGIN is not None})
     if endpoint=='reload-source':
         states[id]['plugin']['editor']=states[id]['plugin']['editor'].replace('/fixture/','/reloaded/')

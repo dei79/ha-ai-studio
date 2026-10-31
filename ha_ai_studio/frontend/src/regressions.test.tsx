@@ -421,3 +421,46 @@ describe("Local custom editors", () => {
     expect(reload).toBeDisabled();
   });
 });
+
+it("offers stable release sources without local development and submits latest", async () => {
+  const transport = mockApi();
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(screen.getByRole("button", { name: "Settings" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Add repository" }),
+  );
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Source type" }),
+    "release",
+  );
+  expect(
+    screen.queryByRole("option", { name: "Local directory" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("textbox", { name: /Release tag or latest/ }),
+  ).toHaveValue("latest");
+  await user.type(
+    screen.getByRole("textbox", { name: "GitHub repository URL" }),
+    "https://github.com/example/actions",
+  );
+  await user.click(
+    screen
+      .getAllByRole("button", { name: "Add repository" })
+      .find((button) => button.getAttribute("form") === "repository-form")!,
+  );
+  await waitFor(() =>
+    expect(
+      transport.calls.some(
+        (c) =>
+          c.path.endsWith("/repositories") &&
+          JSON.stringify(c.body) ===
+            JSON.stringify({
+              kind: "release",
+              url: "https://github.com/example/actions",
+              ref: "latest",
+            }),
+      ),
+    ).toBe(true),
+  );
+});

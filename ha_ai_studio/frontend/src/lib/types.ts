@@ -71,7 +71,8 @@ export interface Discovery {
   legacy_pending: boolean;
 }
 export interface Repository {
-  kind?: "git" | "local";
+  kind?: "git" | "local" | "release";
+  release?: { tag: string; release_id: number; sha256: string };
   id: string;
   url: string;
   ref: string;

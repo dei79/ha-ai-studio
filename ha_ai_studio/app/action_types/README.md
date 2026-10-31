@@ -113,3 +113,25 @@ Use relative imports (`./fields.js`) and relative asset URLs (`new URL('./style.
 Editors execute trusted JavaScript with Studio's browser privileges. This is not a security sandbox. They should only implement configuration controls; Input, Output, activation and saving remain Studio-owned. Never put secrets or private data in `ui/`. Custom editors do not enable draft execution for Git/local actions; use isolated MQTT integration tests.
 
 Schema evolution: reload currently rejects a source whose settings schema does not accept the saved draft. When adding incompatible required settings, keep the schema temporarily compatible or create a new inactive instance from the refreshed catalog. There is no automatic settings migration.
+
+## Built GitHub releases
+
+Settings → Action repositories → **GitHub Release** accepts a public GitHub
+repository URL and `latest` or an explicit stable tag. Refresh resolves `latest`
+through GitHub's latest-release API; drafts and prereleases are rejected. The
+release must attach `ha-ai-studio-actions.zip` and
+`ha-ai-studio-actions.zip.sha256` (one line: lowercase SHA256, two spaces, filename).
+GitHub's automatically generated source archives are not used.
+
+The ZIP contains `actions/<id>/` with the same manifest/runtime contract as Git
+sources, including already-built `ui/` assets. Downloads and extraction are bounded
+(32 MiB total, 5 MiB per file, 2048 entries); absolute/traversing paths, dotfiles,
+duplicate paths, encrypted entries and symlinks are rejected. The checksum detects
+corruption, not an untrusted publisher. Only install trusted repositories.
+
+Studio does not run npm or build scripts. It stores the resolved release tag, ID
+and package SHA256 in each immutable binding. Refresh changes only the creation
+catalog; existing Actions keep their version and snapshots across refresh and
+restart. There is no automatic conversion of existing Git/local sources or in-place
+release upgrade. Failed refreshes preserve the previous catalog. GitHub network
+access and unauthenticated API rate limits apply; private releases are unsupported.
