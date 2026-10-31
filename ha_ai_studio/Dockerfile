@@ -1,3 +1,10 @@
+FROM node:22.21.0-bookworm-slim@sha256:f9f7f95dcf1f007b007c4dcd44ea8f7773f931b71dc79d57c216e731c87a090b AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm test && npm run build
+
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HA_AI_STUDIO_DATA=/data \
     PATH="/opt/venv/bin:$PATH"
@@ -11,6 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip==26.2.2 \
     && pip install --no-cache-dir -r requirements.lock.txt
 COPY LICENSE THIRD_PARTY.md ./
 COPY app ./app
+COPY --from=frontend /frontend/dist ./app/static
 EXPOSE 8099
 CMD ["python", "-m", "app.server"]
 

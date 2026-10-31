@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import re
 import os
 import tempfile
 import threading
@@ -259,8 +260,16 @@ class API(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post('/api/delete-action',{'id':'echo','confirmed':True})).status,200)
     async def test_boundary_and_relative_ingress_assets(self):
         self.assertEqual((await self.client.post('/api/actions',json={})).status,403)
-        html=await (await self.client.get('/')).text();self.assertIn('src="static/app.js"',html)
-        js=await (await self.client.get('/static/app.js')).text();self.assertIn("new URL('api/'+action,document.baseURI)",js);self.assertIn('../action-types/${type}/editor.js',js)
+        html=await (await self.client.get('/')).text()
+        assets=re.findall(r'(?:src|href)="(\./static/[^" ]+)"',html)
+        self.assertGreaterEqual(len(assets),2)
+        for asset in assets:
+            response=await self.client.get('/'+asset.removeprefix('./'))
+            self.assertEqual(response.status,200)
+            self.assertIn("default-src 'self'",response.headers['Content-Security-Policy'])
+            self.assertGreater(len(await response.read()),100)
+        for path in ('/static/missing.js','/static/server.py','/static/package.json'):
+            self.assertEqual((await self.client.get(path)).status,404)
 
 
 class ExternalCatalog(unittest.IsolatedAsyncioTestCase):
