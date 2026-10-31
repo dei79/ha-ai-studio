@@ -24,6 +24,8 @@ export interface ActionType {
   type: string;
   name: string;
   dynamic?: boolean;
+  local?: boolean;
+  editor?: string | null;
   version?: string;
   commit?: string;
   example?: { request_id?: string; data: Json } | null;
@@ -68,6 +70,7 @@ export interface Discovery {
   legacy_pending: boolean;
 }
 export interface Repository {
+  kind?: "git" | "local";
   id: string;
   url: string;
   ref: string;
@@ -105,12 +108,13 @@ export interface ApiResponses {
   action: ActionState;
   deactivate: ActionState;
   environment: ActionState;
+  "reload-source": ActionState;
   brokers: Brokers;
   "broker-refresh": Brokers;
   "broker-delete": Brokers;
   "broker-test": BrokerProbe;
   discovery: Discovery;
-  repositories: { repositories: Repository[] };
+  repositories: { repositories: Repository[]; local_available?: boolean };
   "repository-refresh": { repositories: Repository[] };
   "repository-delete": { repositories: Repository[] };
   "delete-action": unknown;

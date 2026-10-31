@@ -64,6 +64,8 @@ def create_app(root=None, dev=None):
             value=await request.json()
             if not isinstance(value,dict) or set(value)!={'id'} or not isinstance(value['id'],str):raise Invalid('Provide repository ID.')
             studio.repositories.refresh(value['id']);return web.json_response(studio.repositories.public())
+        if action == 'reload-source' and request.method=='POST':
+            return web.json_response(await studio.reload_source(request.query.get('id')))
         if action == 'environment' and request.method=='POST':
             service=studio.get(request.query.get('id'));service.ensure_idle()
             if not service.environment:raise Invalid('Built-in actions need no installation.')
@@ -118,6 +120,21 @@ def create_app(root=None, dev=None):
         if kind not in TYPES:raise web.HTTPNotFound()
         return web.FileResponse(Path(TYPES[kind].__file__).parent/'editor.js')
 
+    async def plugin_asset(request):
+        from .plugins import local_file
+        snapshot=request.match_info['snapshot'];kind=request.match_info['kind'];name=request.match_info['name']
+        # Only explicitly declared UI trees in currently bound instances are public.
+        plugin=next((s.plugin for s in studio.services.values() if s.environment and
+                     s.plugin.record['snapshot']==snapshot and s.type==kind),None)
+        if plugin is None or not plugin.manifest.get('editor') or not name.startswith('ui/'):
+            raise web.HTTPNotFound()
+        if any(part.startswith('.') for part in Path(name).parts) or Path(name).suffix not in ('.js','.css','.svg','.png','.jpg','.webp','.woff2'):
+            raise web.HTTPNotFound()
+        try:path=local_file(plugin.source,name)
+        except Invalid:raise web.HTTPNotFound() from None
+        return web.FileResponse(path)
+
+    app.router.add_get('/plugin-assets/{snapshot}/{kind}/{name:.*}',plugin_asset)
     app.router.add_get('/action-types/{kind}/editor.js',type_editor)
     app.router.add_get('/', index)
     app.router.add_get('/static/{name}', static)

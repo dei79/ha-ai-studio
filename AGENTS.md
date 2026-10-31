@@ -3,7 +3,7 @@
 ## Product and UI
 - Home Assistant owns triggers, schedules, conditions and follow-up actions. This app executes individual configured Actions, not workflows.
 - The Actions table is the main page. Create action opens a right-hand side panel with name and action type. Editing opens a separate configuration page with Input, type settings and Output. No workflow diagram, mappings, templates or activity chains.
-- New Echo instances come from the separate ha-ai-studio-actions-core Git repository. The original Echo runtime under `ha_ai_studio/app/action_types/legacy_echo/` is compatibility-only for saved instances and is not offered for creation. Trusted Git action types use validated manifests, a schema editor and a separate per-instance venv runner. Local repository sources are not supported.
+- New Echo instances come from the separate ha-ai-studio-actions-core Git repository. The original Echo runtime under `ha_ai_studio/app/action_types/legacy_echo/` is compatibility-only for saved instances and is not offered for creation. Trusted Git action types use validated manifests, a schema editor and a separate per-instance venv runner. Local development sources follow the Local Action development rules below.
 - Keep the Home Assistant visual style: HA blue, compact navigation, plain cards and clear textual states. All UI, errors, protocol diagnostics and documentation must be English.
 - Use only the embedded Codex browser (IAB) for interactive and visual testing; reuse the existing tab. No external Playwright, Chrome or Safari.
 
@@ -35,3 +35,8 @@
 - Side panels use a shared 640px width capped at the viewport width and share a contrasting 64px header aligned with the blue app header. Group connection identity/status in one card with a traffic-light indicator plus explicit text; logs use neon green on black, fill remaining height and scroll without wrapping.
 
 - Side panels have a fixed footer for primary and confirmation buttons. Keep the header and footer visible while only the body scrolls; associate footer submit buttons with their forms.
+
+## Local Action development and custom editors
+- Explicitly configured local sources are supported on the development server under `HA_AI_STUDIO_LOCAL_ACTIONS`; Compose mounts `LOCAL_ACTIONS_DIR` read-only. They use validated immutable snapshots and the same per-instance runner as Git sources.
+- Reload local sources only for inactive, idle instances. Preserve identities, settings and request history; retain historical snapshots. Do not silently follow working-directory edits during execution.
+- Trusted Actions may declare `editor: "ui/editor.js"`. Custom configuration editors edit draft settings inside the Action page; Studio still owns saving, schema validation, Input, Output and activation. Serve only UI assets from a bound snapshot; preserve relative imports under Ingress. Editors are trusted browser code, not a sandbox.

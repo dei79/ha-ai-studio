@@ -16,10 +16,12 @@ services:
       DEV_MQTT_TLS: ${DEV_MQTT_TLS:-false}
       HA_AI_STUDIO_DATA: /data
       HA_AI_STUDIO_DEV: '1'
+      HA_AI_STUDIO_LOCAL_ACTIONS: /local-actions
     ports:
       - '127.0.0.1:8099:8099'
     volumes:
       - ./.dev-data:/data
+      - ${LOCAL_ACTIONS_DIR:-../ha-ai-studio-actions-ai-on-the-edge-meters}:/local-actions:ro
   ingress:
     image: ha-ai-studio:dev
     platform: linux/amd64

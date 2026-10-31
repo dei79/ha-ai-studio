@@ -92,6 +92,9 @@ export function ActionEditor({
       setDirty(false);
       return;
     }
+    setLoadingError("");
+    legacyRead.current = null;
+    setLegacyReady(false);
     setDraft(structuredClone(value.config.draft));
     setEnabled(value.enabled);
     setValues({});
@@ -145,18 +148,19 @@ export function ActionEditor({
   function configuration(): Configuration {
     if (!draft || !state?.plugin)
       throw new Error("Action settings are not ready.");
-    if (!state.plugin.dynamic && !legacyRead.current)
+    if ((!state.plugin.dynamic || state.plugin.editor) && !legacyRead.current)
       throw new Error("Compatibility editor is not ready.");
     return {
       ...draft,
-      settings: state.plugin.dynamic
-        ? readSettings(
-            state.plugin.settings_schema,
-            draft.settings,
-            values,
-            raw,
-          )
-        : legacyRead.current!(),
+      settings:
+        state.plugin.dynamic && !state.plugin.editor
+          ? readSettings(
+              state.plugin.settings_schema,
+              draft.settings,
+              values,
+              raw,
+            )
+          : legacyRead.current!(),
     };
   }
   if (!state || !brokers)
@@ -181,7 +185,8 @@ export function ActionEditor({
         <Notice>{state.issues.join(" ")}</Notice>
       </section>
     );
-  const ready = !!state.plugin?.dynamic || legacyReady;
+  const ready =
+    (!!state.plugin?.dynamic && !state.plugin.editor) || legacyReady;
   return (
     <section>
       <Button variant="text" onClick={back} disabled={op.busy}>
@@ -190,6 +195,37 @@ export function ActionEditor({
       <div className="heading">
         <h1>{state.definition.name}</h1>
         <div className="actions">
+          {state.enabled && (
+            <Button
+              disabled={op.busy || state.busy}
+              onClick={() => {
+                version.current++;
+                void op.run(async () => {
+                  const value = await api("deactivate", {}, id);
+                  setState(value);
+                  setEnabled(false);
+                  setMessage("Action deactivated.");
+                });
+              }}
+            >
+              Deactivate
+            </Button>
+          )}
+          {state.plugin?.local && (
+            <Button
+              disabled={op.busy || state.busy || state.enabled || dirty}
+              title="Save or discard changes and deactivate the action before reloading."
+              onClick={() => {
+                version.current++;
+                void op.run(async () => {
+                  load(await api("reload-source", {}, id));
+                  setMessage("Local source reloaded.");
+                });
+              }}
+            >
+              Reload from source
+            </Button>
+          )}
           {!state.plugin?.dynamic && state.supported && (
             <Button
               disabled={op.busy || !ready}
@@ -313,7 +349,7 @@ export function ActionEditor({
               />
             </Card>
             <Card title="Action settings">
-              {state.plugin?.dynamic ? (
+              {state.plugin?.dynamic && !state.plugin.editor ? (
                 <SchemaEditor
                   schema={state.plugin.settings_schema}
                   initial={draft.settings}
@@ -331,6 +367,7 @@ export function ActionEditor({
               ) : (
                 <LegacyEditor
                   type={state.definition.type}
+                  editor={state.plugin?.editor}
                   settings={draft.settings}
                   onReady={(read) => {
                     legacyRead.current = read;

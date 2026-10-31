@@ -60,6 +60,8 @@ function mockApi(value = action()) {
           "actions",
           "action",
           "environment",
+          "deactivate",
+          "reload-source",
           "brokers",
           "repositories",
           "discovery",
@@ -94,6 +96,7 @@ function mockApi(value = action()) {
           delivery: "not_sent",
           result: { data: JSON.parse(body.payload).data },
         };
+      if (path.endsWith("/deactivate")) value.enabled = false;
       if (path.endsWith("/action") && body) {
         value.config = {
           draft: body.config,
@@ -369,5 +372,52 @@ it("compatibility draft preview only uses the test API and preserves null", asyn
   expect(mock.calls[0].body).toMatchObject({
     config,
     payload: '{"request_id":"draft-test","data":null}',
+  });
+});
+
+describe("Local custom editors", () => {
+  it("can deactivate an active action even when its editor fails", async () => {
+    const value = action();
+    value.enabled = true;
+    value.plugin!.local = true;
+    value.plugin!.editor = "plugin-assets/fixture/custom/ui/missing.js";
+    const mock = mockApi(value);
+    render(
+      <ActionEditor
+        id="fixture"
+        back={() => {}}
+        onDirty={() => {}}
+        onBusy={() => {}}
+      />,
+    );
+    await screen.findByText(
+      "Action editor failed to load. Check its module and render contract.",
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Deactivate" }));
+    await waitFor(() =>
+      expect(mock.calls.some((c) => c.path.endsWith("/api/deactivate"))).toBe(
+        true,
+      ),
+    );
+  });
+  it("blocks reload with unsaved changes and exposes it only for local sources", async () => {
+    const value = action();
+    value.plugin!.local = true;
+    mockApi(value);
+    render(
+      <ActionEditor
+        id="fixture"
+        back={() => {}}
+        onDirty={() => {}}
+        onBusy={() => {}}
+      />,
+    );
+    const reload = await screen.findByRole("button", {
+      name: "Reload from source",
+    });
+    expect(reload).toBeEnabled();
+    await userEvent.type(screen.getByLabelText("Name"), " changed");
+    expect(reload).toBeDisabled();
   });
 });

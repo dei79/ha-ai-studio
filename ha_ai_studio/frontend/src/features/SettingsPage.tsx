@@ -7,6 +7,7 @@ import {
   Input,
   Notice,
   SidePanel,
+  Select,
 } from "../design-system";
 import { api, errorText } from "../lib/api";
 import { useOperation, usePoll } from "../lib/hooks";
@@ -16,10 +17,14 @@ import { BrokerPanel, BrokerTestPanel } from "./BrokerPanels";
 function RepositoryPanel({
   close,
   saved,
+  localAvailable,
 }: {
   close: () => void;
   saved: () => Promise<void>;
+  localAvailable: boolean;
 }) {
+  const [kind, setKind] = useState("git");
+  const [path, setPath] = useState(".");
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("main");
   const op = useOperation();
@@ -44,28 +49,53 @@ function RepositoryPanel({
         onSubmit={(e) => {
           e.preventDefault();
           void op.run(async () => {
-            await api("repositories", { url, ref });
+            await api(
+              "repositories",
+              kind === "local" ? { kind, path } : { url, ref },
+            );
             await saved();
             close();
           });
         }}
       >
         <fieldset disabled={op.busy}>
-          <Input
-            label="Git HTTPS URL"
-            type="url"
-            required
-            placeholder="https://github.com/owner/actions.git"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <Input
-            label="Branch, tag or commit"
-            required
-            maxLength={128}
-            value={ref}
-            onChange={(e) => setRef(e.target.value)}
-          />
+          {localAvailable && (
+            <Select
+              label="Source type"
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+            >
+              <option value="git">Git repository</option>
+              <option value="local">Local directory</option>
+            </Select>
+          )}
+          {kind === "local" ? (
+            <Input
+              label="Local directory"
+              required
+              value={path}
+              hint="Relative to the server's mounted actions root. Use . for the root itself."
+              onChange={(e) => setPath(e.target.value)}
+            />
+          ) : (
+            <>
+              <Input
+                label="Git HTTPS URL"
+                type="url"
+                required
+                placeholder="https://github.com/owner/actions.git"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+              <Input
+                label="Branch, tag or commit"
+                required
+                maxLength={128}
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+              />
+            </>
+          )}
           <p>
             Each action needs an action.json manifest, a Python entrypoint and a
             hashed requirements.lock. No code runs during catalog refresh.
@@ -85,6 +115,7 @@ type Panel =
 export function SettingsPage() {
   const [brokers, setBrokers] = useState<Brokers>();
   const [discovery, setDiscovery] = useState<Discovery>();
+  const [localAvailable, setLocalAvailable] = useState(false);
   const [repos, setRepos] = useState<Repository[]>([]);
   const [panel, setPanel] = useState<Panel>();
   const [loadError, setLoadError] = useState("");
@@ -100,6 +131,7 @@ export function SettingsPage() {
       setBrokers(b);
       setDiscovery(d);
       setRepos(r.repositories);
+      setLocalAvailable(!!r.local_available);
       setLoadError("");
     }
   }
@@ -235,7 +267,11 @@ export function SettingsPage() {
         <p>
           Install only repositories you trust. Python environments isolate
           dependencies; repository code can access files and the network. Public
-          HTTPS repositories are supported.
+          HTTPS repositories are supported.{" "}
+          {localAvailable &&
+            "Local directories are also available on this server."}
+          Custom editors run trusted JavaScript in Studio; install only code you
+          trust.
         </p>
         <DataTable
           label="Action repositories"
@@ -252,7 +288,13 @@ export function SettingsPage() {
             <Fragment key={repo.id}>
               <tr>
                 <td>{repo.url}</td>
-                <td>{repo.system ? "System" : "User"}</td>
+                <td>
+                  {repo.kind === "local"
+                    ? "Local"
+                    : repo.system
+                      ? "System"
+                      : "User"}
+                </td>
                 <td>{repo.ref}</td>
                 <td>{repo.status}</td>
                 <td>
@@ -321,7 +363,11 @@ export function SettingsPage() {
         />
       )}
       {panel?.kind === "repository" && (
-        <RepositoryPanel close={close} saved={() => refresh()} />
+        <RepositoryPanel
+          localAvailable={localAvailable}
+          close={close}
+          saved={() => refresh()}
+        />
       )}
       {panel?.kind === "delete-repository" && (
         <ConfirmDelete

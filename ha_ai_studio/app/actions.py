@@ -330,6 +330,34 @@ class Studio:
             if self.running:service.task=asyncio.create_task(service.run())
             if service.environment:service.environment.start()
             return service.status()
+    async def reload_source(self,id):
+        async with self.brokers.lock:
+            async with self.lock:
+                service=self.get(id);service.ensure_idle()
+                if service.enabled:raise Invalid('Deactivate the action before reloading its source.')
+                if not service.environment or not service.plugin.metadata.get('local'):raise Invalid('Only local actions support source reload.')
+                async with service.lock:
+                    repository_id=service.plugin.record['repository_id']
+                    self.repositories.refresh(repository_id)
+                    await self.repositories.tasks[repository_id]
+                    repo=next(r for r in self.repositories.state['repositories'] if r['id']==repository_id)
+                    if repo['status']!='Ready':raise Invalid('Local source refresh failed. The previous action is preserved.')
+                    plugin=self.repositories.types().get(service.type)
+                    if plugin is None:raise Invalid('The action ID is missing from the local source.')
+                    snapshot=plugin.record['snapshot'];self.repositories.active_snapshots.add(snapshot)
+                    try:
+                        await plugin.validate(service.config['draft']['settings'])
+                        candidate=copy.deepcopy(self.registry)
+                        definition=next(d for d in candidate['agents'] if d['id']==id)
+                        history=definition.setdefault('plugin_history',[])
+                        if not any(r['snapshot']==service.plugin.record['snapshot'] for r in history):history.append(copy.deepcopy(service.plugin.record))
+                        definition['plugin']=copy.deepcopy(plugin.record)
+                        self.store.write('agents.json',candidate);self.registry=candidate
+                        service.definition=copy.deepcopy(definition);service.plugin=plugin
+                        service.environment.plugin=plugin
+                        service.environment.start()
+                    finally:self.repositories.active_snapshots.discard(snapshot)
+                return service.status()
     async def delete_repository(self,value):
         # Serialize source deletion with instance creation and its durable Git binding.
         async with self.lock:return await self.repositories.delete(value)

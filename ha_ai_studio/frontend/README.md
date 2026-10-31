@@ -12,7 +12,7 @@ HA AI Studio uses React, strict TypeScript and SCSS. The production application 
 
 Compose feature pages from design-system components. Add a semantic token before introducing a reusable styling value. Keep business logic out of generic controls. Side panels share a 640px width capped at the viewport, a 64px header, a scrolling body and a fixed footer. Submit buttons in the footer must reference their form by ID. Logs preserve lines and scroll horizontally.
 
-React owns UI state and rendering. The only imperative DOM island is the backend-allowlisted legacy editor, whose import is resolved relative to the document's Ingress path. Git Actions use the React schema editor and never load repository JavaScript. Optional numeric settings preserve absence separately from zero; arbitrary settings JSON can contain any JSON value. The backend remains authoritative for validation, activation and MQTT state.
+React owns UI state and rendering. Trusted custom configuration editors and the compatibility editor use a managed DOM island, with module imports resolved relative to the document's Ingress path. Actions without a custom editor use the React schema editor. Custom editor modules may provide a cleanup callback and always save through Studio schema validation. Optional numeric settings preserve absence separately from zero; arbitrary settings JSON can contain any JSON value. The backend remains authoritative for validation, activation and MQTT state.
 
 ## Development and validation
 
@@ -48,3 +48,5 @@ docker run --rm --name ha-react-ui-fixture --platform linux/amd64 \
 Use the embedded Codex browser at `http://localhost:8101/api/hassio_ingress/ui-check/`. This test-only server serves the real built assets and compatibility editor, with synthetic API responses and disposable memory state. It never starts MQTT, repositories or the backend lifecycle. Unknown API endpoints fail closed. It is excluded from published app packages. Verify creation, editing, dirty navigation, activation/deactivation, deletion, compatibility draft preview and desktop/tablet layouts here. Actual backend and isolated MQTT integration are verified by the separate suites above.
 
 The public source archive uses the explicit `FRONTEND_FILES` allowlist in `scripts/package.py`. Register new build inputs there; do not package `node_modules`, captures, local configuration or private data. Runtime dependency notices are in `../THIRD_PARTY.md`.
+
+To also verify the meter example's real custom editor modules in the synthetic fixture, add `-v "$PWD/../ha-ai-studio-actions-ai-on-the-edge-meters:/fixture-meter:ro"` to the fixture container command. This enables the local-source form and a synthetic meter Action type. The fixture only reads public example UI files; it never starts the real Action runner or connects to MQTT.

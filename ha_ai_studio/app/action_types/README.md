@@ -29,7 +29,7 @@ Historical files and snapshots referenced by deleted actions remain preserved.
 Settings → Action repositories accepts public HTTPS Git repositories and a branch,
 tag or commit. Refresh reads metadata only. Existing instances stay pinned to their
 original commit; refreshing changes the catalog for newly created instances only.
-Local sources, private Git credentials and in-place version upgrades are not yet supported.
+Private Git credentials and in-place Git version upgrades are not yet supported. Local development sources support explicit reload as described below.
 
 Repository layout:
 
@@ -64,7 +64,7 @@ otherwise Test in Home Assistant is unavailable until a valid example is supplie
 Installation checks that `execute` accepts the positional arguments `data, settings`
 without calling the function.
 The settings editor supports primitive properties and falls back to a JSON editor
-for complex schemas. Repository JavaScript is never served to the browser.
+for complex schemas. An optional trusted custom editor can replace the schema editor; see below.
 
 `action.py` exports `execute(data, settings)`, either sync or async, returning finite
 JSON. Sibling Python modules are supported. Stdout and stderr are discarded; the
@@ -92,8 +92,24 @@ execution; execution and MQTT delivery retain their separate durable states.
 
 **Trust boundary:** a venv isolates dependencies, not files, processes or networking.
 Repository code runs with the app's OS permissions and must be trusted. A separate
-process and filtered environment do not provide a security sandbox. Git Actions have
+process and filtered environment do not provide a security sandbox. Git and local Actions have
 no draft preview until a safe preview contract is implemented. Use isolated brokers
 and synthetic data for integration testing. Existing bundled Echo instances retain their compatibility runtime. New Echo instances use the Git runner.
 
 Git schema validation runs in separate one-shot processes (including manifest and example checks). Each worker has a 1-second CPU limit, 256 MiB address-space growth limit above the initial interpreter mappings, and a 3-second wall deadline including queueing. At most two validators run concurrently. Limits fail closed with a sanitized error; cancellation kills and reaps the process group. Catalog rendering reuses examples validated during import and never evaluates schemas. These limits are resource isolation, not a sandbox for untrusted repositories.
+
+## Local development sources
+
+In development mode (`HA_AI_STUDIO_DEV=1`), explicitly set `HA_AI_STUDIO_LOCAL_ACTIONS` to a server directory. The Compose development server mounts `LOCAL_ACTIONS_DIR` read-only at `/local-actions`; its default is the sibling `ha-ai-studio-actions-ai-on-the-edge-meters` example directory. Add a **Local directory** source in Settings with a relative path (`.` for the mounted root). A source may contain `actions/<id>/` directories or be one action directory. Absolute paths, traversal and symlinks are rejected. Dotfiles, dependency caches and common private key files are excluded; keep all other private data out of action sources too. Sources are limited to 2048 files, 5 MiB per file and 32 MiB total.
+
+Refresh copies and validates a fixed snapshot without executing code. New instances use that snapshot. **Reload from source** on an inactive, idle local instance refreshes its source, validates saved draft settings against the new schema, pins the new snapshot and rebuilds its environment. Save or discard unsaved browser edits first. Identities, routes, configuration and deduplication history remain unchanged. Historical snapshots stay preserved. Installation failure blocks execution until recovery; interrupted installation requires rebuilding. Git instances remain pinned and have no in-place reload.
+
+## Trusted custom configuration editors
+
+Add `"editor": "ui/editor.js"` to the manifest. It must be an ES module exporting `render(host, settings, context)`. Return a synchronous settings getter, or `{read, dispose}` where `dispose()` removes any external listeners/resources on unmount. Call `context.changed()` after an edit. Do not mutate the supplied settings or silently populate defaults on opening. Studio passes a detached draft copy and saves/validates the getter's JSON result through its existing schema validation. A missing editor declaration uses the schema editor. A broken declared editor blocks saving with an English diagnostic.
+
+Use relative imports (`./fields.js`) and relative asset URLs (`new URL('./style.css', import.meta.url)`) so modules work under Ingress. Assets must be in `ui/`; supported extensions are `.js`, `.css`, `.svg`, `.png`, `.jpg`, `.webp`, `.woff2`. Python, lockfiles, dotfiles and files outside `ui/` are never served by the plugin asset endpoint. Only snapshots currently bound to an instance serve UI assets. A reload changes the snapshot URL, avoiding the browser module cache. UI code must follow the app CSP (no inline scripts/styles, eval or external CDN).
+
+Editors execute trusted JavaScript with Studio's browser privileges. This is not a security sandbox. They should only implement configuration controls; Input, Output, activation and saving remain Studio-owned. Never put secrets or private data in `ui/`. Custom editors do not enable draft execution for Git/local actions; use isolated MQTT integration tests.
+
+Schema evolution: reload currently rejects a source whose settings schema does not accept the saved draft. When adding incompatible required settings, keep the schema temporarily compatible or create a new inactive instance from the refreshed catalog. There is no automatic settings migration.

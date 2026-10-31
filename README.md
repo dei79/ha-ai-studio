@@ -16,6 +16,12 @@ Optional **Settings → edit broker → Enable MQTT Discovery** announces Studio
 
 The frontend design system, build layout and isolated browser checks are documented in [frontend development](ha_ai_studio/frontend/README.md). The production frontend is built inside Docker and served by the Python backend in the same container.
 
+## Local Action development
+
+The development server also mounts `LOCAL_ACTIONS_DIR` read-only (default: the sibling `ha-ai-studio-actions-ai-on-the-edge-meters` directory). In Settings → Action repositories add a **Local directory** source with path `.`. Create an instance and edit its configuration. After changing source files, save/discard edits, deactivate the instance, and select **Reload from source**. Wait for its environment to become Ready before reactivating against an isolated test broker. No Git push is required. Local sources are enabled only on the explicitly configured development server.
+
+Actions may include a trusted custom configuration editor via `"editor": "ui/editor.js"` in their manifest. See the [plugin contract](ha_ai_studio/app/action_types/README.md) for the editor interface, source limits and trust model. Local development still uses real MQTT; browser checks must use synthetic fixtures.
+
 ## Install
 
 After the first successful container release, add `https://github.com/ha-ai-studio/ha-ai-studio` under **Settings → Apps → Install app → ⋮ → Repositories**, then install **HA AI Studio** and open its web UI through Ingress. This requires Home Assistant with Supervisor on amd64. The repository and GHCR package must be public for installation without registry credentials. The app is marked experimental. Action types are installed from Git repositories in Settings. Echo is maintained in the separate `ha-ai-studio-actions-core` repository; existing bundled Echo instances remain supported without automatic migration.

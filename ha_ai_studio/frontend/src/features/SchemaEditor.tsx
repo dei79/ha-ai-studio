@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Checkbox, Input, Select, Textarea } from "../design-system";
-import { appUrl, errorText } from "../lib/api";
+import { appUrl } from "../lib/api";
 import type { Json, Schema } from "../lib/types";
 export function simpleSchema(schema: Schema): boolean {
   return (
@@ -148,23 +148,24 @@ export function SchemaEditor({
     </>
   );
 }
-interface LegacyModule {
+interface EditorModule {
   render: (
     host: HTMLElement,
     settings: Json,
     context: { changed: () => void },
-  ) => () => Json;
+  ) => (() => Json) | { read: () => Json; dispose: () => void };
 }
-// Only the backend's allowlisted compatibility editor can use an imperative DOM island.
-// Git repositories never supply browser code.
+// Trusted editor modules own this DOM island; React owns the surrounding form.
 export function LegacyEditor({
   type,
+  editor,
   settings,
   onReady,
   onError,
   onChange,
 }: {
   type: string;
+  editor?: string | null;
   settings: Json;
   onReady: (read: (() => Json) | null) => void;
   onError: (message: string) => void;
@@ -175,27 +176,46 @@ export function LegacyEditor({
   callbacks.current = { onReady, onError, onChange };
   useEffect(() => {
     let cancelled = false;
+    let dispose: (() => void) | undefined;
     const element = host.current!;
     callbacks.current.onReady(null);
     const url = appUrl(
-      `action-types/${encodeURIComponent(type)}/editor.js`,
+      editor || `action-types/${encodeURIComponent(type)}/editor.js`,
     ).href;
     import(/* @vite-ignore */ url)
-      .then((module: LegacyModule) => {
-        if (!cancelled)
-          callbacks.current.onReady(
-            module.render(element, structuredClone(settings), {
-              changed: () => callbacks.current.onChange(),
-            }),
-          );
+      .then((module: EditorModule) => {
+        if (!cancelled) {
+          const result = module.render(element, structuredClone(settings), {
+            changed: () => {
+              if (!cancelled) callbacks.current.onChange();
+            },
+          });
+          const read = typeof result === "function" ? result : result?.read;
+          dispose = typeof result === "object" ? result.dispose : undefined;
+          if (typeof read !== "function")
+            throw new Error("Action editor must return a settings reader.");
+          callbacks.current.onReady(read);
+        }
       })
-      .catch((error) => {
-        if (!cancelled) callbacks.current.onError(errorText(error));
+      .catch(() => {
+        if (!cancelled)
+          callbacks.current.onError(
+            "Action editor failed to load. Check its module and render contract.",
+          );
       });
     return () => {
       cancelled = true;
-      element.replaceChildren();
+      try {
+        dispose?.();
+      } catch {
+        callbacks.current.onError(
+          "Action editor cleanup failed. Check its dispose contract.",
+        );
+      } finally {
+        element.replaceChildren();
+        callbacks.current.onReady(null);
+      }
     };
-  }, [type, settings]);
+  }, [type, editor, settings]);
   return <div ref={host} />;
 }

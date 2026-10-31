@@ -125,7 +125,7 @@ async def manifest(root):
     if path.stat().st_size>32768:raise Invalid('Action manifest is too large.')
     try:
         value=json.loads(path.read_text())
-        if set(value)-{'id','name','description','version','python','entrypoint','settings_schema','input_schema','output_schema','example'}:raise ValueError()
+        if set(value)-{'id','name','description','version','python','entrypoint','settings_schema','input_schema','output_schema','example','editor'}:raise ValueError()
         for key in ('id','name','description','version','python','entrypoint','settings_schema'):
             if key not in value:raise ValueError()
         if not re.fullmatch('[a-z][a-z0-9-]{0,47}',value['id']):raise ValueError()
@@ -134,6 +134,10 @@ async def manifest(root):
         if value['python']!=f'{sys.version_info.major}.{sys.version_info.minor}':raise Invalid('Action requires a different Python version.')
         if not re.fullmatch(r'[a-zA-Z_][\w/]*\.py',value['entrypoint']):raise ValueError()
         local_file(root,value['entrypoint']);local_file(root,'requirements.lock')
+        if 'editor' in value:
+            editor=value['editor']
+            if not isinstance(editor,str) or not re.fullmatch(r'ui/[A-Za-z0-9_./-]+\.js',editor):raise Invalid('Editor must be a JavaScript module inside ui/.')
+            local_file(root,editor)
         for key in ('settings_schema','input_schema','output_schema'):
             schema=value.get(key,{})
             # External references could cause server-side network/file access.
@@ -163,7 +167,8 @@ class GitPlugin:
         self.metadata={'type':record['type'],'name':self.manifest['name'],'description':self.manifest['description'],
             'input_schema':input_schema,'output_schema':output_schema,'settings_schema':copy.deepcopy(self.manifest['settings_schema']),
             'example':copy.deepcopy(example),
-            'source':record['repository_id'],'version':self.manifest['version'],'commit':record['commit'],'dynamic':True}
+            'source':record['repository_id'],'version':self.manifest['version'],'commit':record['commit'],'dynamic':True,'local':record.get('source_kind')=='local',
+            'editor':f"plugin-assets/{record['snapshot']}/{record['type']}/{self.manifest['editor']}" if self.manifest.get('editor') else None}
     async def validate(self,value):
         if len(json.dumps(value,allow_nan=False).encode())>100000:raise Invalid('Action settings exceed 100000 bytes.')
         if not isinstance(value,dict) or not await schema_valid(self.manifest['settings_schema'],value):raise Invalid('Settings do not match the action schema.')
@@ -179,6 +184,8 @@ class Repositories:
     def __init__(self,root):
         self.store=Store(Path(root)/'repositories');self.state=self.store.read('catalog.json',{'repositories':[]})
         self.lock=asyncio.Lock();self.tasks={};self.active_snapshots=set()
+        configured=os.getenv('HA_AI_STUDIO_LOCAL_ACTIONS') if os.getenv('HA_AI_STUDIO_DEV')=='1' else None
+        self.local_root=Path(configured).resolve() if configured else None
         for repo in self.state['repositories']:
             if repo['status']=='Syncing':repo.update(status='Failed',logs=['Repository sync interrupted. Refresh to retry.'])
     def start(self):
@@ -192,6 +199,7 @@ class Repositories:
         if repo['status'] in ('Not synced','Failed'):self.refresh(repo['id'])
     def public(self):
         value=copy.deepcopy(self.state)
+        value['local_available']=self.local_root is not None and self.local_root.is_dir()
         registry=Store(self.store.root.parent).read('agents.json',{})
         used={d['plugin']['repository_id'] for d in registry.get('agents',[]) if d.get('plugin')}
         for repo in value['repositories']:
@@ -205,19 +213,63 @@ class Repositories:
     def types(self):
         return {r['type']:GitPlugin(r,self.store.root/'sources'/r['snapshot']/r['directory']) for repo in self.state['repositories'] for r in repo['actions']}
     def bound(self,record):return GitPlugin(record,self.store.root/'sources'/record['snapshot']/record['directory'])
+    def local_source(self,relative):
+        if self.local_root is None:raise Invalid('Local action sources are not enabled on this server.')
+        if not isinstance(relative,str) or not relative or len(relative)>256 or Path(relative).is_absolute() or '..' in Path(relative).parts:
+            raise Invalid('Provide a directory relative to the configured local actions root.')
+        path=self.local_root
+        for part in Path(relative).parts:
+            path=path/part
+            if path.is_symlink():raise Invalid('Local source symlinks are unsupported.')
+        if not path.resolve().is_relative_to(self.local_root) or not path.is_dir():raise Invalid('Local action directory is unavailable.')
+        return path
     async def save(self,value):
-        if not isinstance(value,dict) or set(value)!={'url','ref'}:raise Invalid('Provide repository URL and Git ref.')
-        url=value['url'];ref=value['ref']
-        if not isinstance(url,str) or len(url)>512:raise Invalid('Provide an HTTPS Git URL without credentials.')
-        parsed=urlsplit(url)
-        if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or any(c.isspace() for c in url):raise Invalid('Provide an HTTPS Git URL without credentials.')
-        if not isinstance(ref,str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/\-]{0,127}',ref) or '..' in ref:raise Invalid('Provide a branch, tag or commit.')
+        local=isinstance(value,dict) and value.get('kind')=='local'
+        if local:
+            if set(value)!={'kind','path'}:raise Invalid('Provide a local directory.')
+            path=self.local_source(value['path'])
+            url=str(path.relative_to(self.local_root));ref='local'
+        else:
+            if not isinstance(value,dict) or set(value)!={'url','ref'}:raise Invalid('Provide repository URL and Git ref.')
+            url=value['url'];ref=value['ref']
+            if not isinstance(url,str) or len(url)>512:raise Invalid('Provide an HTTPS Git URL without credentials.')
+            parsed=urlsplit(url)
+            if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or any(c.isspace() for c in url):raise Invalid('Provide an HTTPS Git URL without credentials.')
+            if not isinstance(ref,str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/\-]{0,127}',ref) or '..' in ref:raise Invalid('Provide a branch, tag or commit.')
         async with self.lock:
             if any(r['url']==url and r['ref']==ref for r in self.state['repositories']):raise Invalid('Repository and ref already configured.')
             if len(self.state['repositories'])>=16:raise Invalid('Maximum of 16 repositories.')
-            repo={'id':uuid.uuid4().hex[:16],'url':url,'ref':ref,'status':'Not synced','actions':[],'logs':[]}
+            repo={'id':uuid.uuid4().hex[:16],'kind':'local' if local else 'git','url':url,'ref':ref,'status':'Not synced','actions':[],'logs':[]}
             candidate=copy.deepcopy(self.state);candidate['repositories'].append(repo);self.store.write('catalog.json',candidate);self.state=candidate
         self.refresh(repo['id']);return self.public()
+    def copy_local(self,source,target):
+        # Copy action content only; never copy repository metadata, secrets or venvs.
+        if (source/'actions').is_symlink():raise Invalid('Local source symlinks are unsupported.')
+        base=source/'actions' if (source/'actions').is_dir() else source
+        directories=sorted(base.iterdir()) if base!=source else [source]
+        count=0;size=0;digest=hashlib.sha256()
+        for directory in directories:
+            if directory.is_symlink():raise Invalid('Local source symlinks are unsupported.')
+            if not directory.is_dir() or directory.name.startswith('.'):continue
+            destination=target/'actions'/directory.name
+            destination.mkdir(parents=True)
+            for current,dirs,files in os.walk(directory,followlinks=False):
+                dirs[:]=sorted(d for d in dirs if not d.startswith('.') and d not in ('__pycache__','node_modules','venv','environments'))
+                for name in dirs+files:
+                    if (Path(current)/name).is_symlink():raise Invalid('Local source symlinks are unsupported.')
+                for name in sorted(files):
+                    if name.startswith('.') or name.endswith(('.pyc','.pem','.key')):continue
+                    path=Path(current)/name
+                    if not path.is_file():raise Invalid('Local action sources must contain regular files.')
+                    count+=1;size+=path.stat().st_size
+                    if count>2048 or size>32*1024*1024 or path.stat().st_size>5*1024*1024:raise Invalid('Local action source exceeds its file or size limits.')
+                    relative=path.relative_to(directory);output=destination/relative
+                    output.parent.mkdir(parents=True,exist_ok=True)
+                    data=path.read_bytes()
+                    if len(data)>5*1024*1024:raise Invalid('Local action file is too large.')
+                    output.write_bytes(data)
+                    digest.update(str(output.relative_to(target)).encode());digest.update(b'\0');digest.update(hashlib.sha256(data).digest())
+        return digest.hexdigest()
     async def delete(self,value):
         if not isinstance(value,dict) or set(value)!={'id','confirmed'} or not isinstance(value['id'],str) or value['confirmed'] is not True:
             raise Invalid('Confirm repository deletion.')
@@ -244,6 +296,7 @@ class Repositories:
         registry=Store(self.store.root.parent).read('agents.json',{})
         for definition in registry.get('agents',[])+registry.get('deleted',[]):
             if definition.get('plugin'):protected.add(definition['plugin']['snapshot'])
+            protected.update(record['snapshot'] for record in definition.get('plugin_history',[]))
         sources=self.store.root/'sources'
         if sources.exists():
             for path in sources.iterdir():
@@ -254,10 +307,13 @@ class Repositories:
         repo=next(r for r in self.state['repositories'] if r['id']==id)
         try:
             await self.update(id,status='Syncing',logs=['Fetching repository metadata.'])
-            await process(['git','init','--quiet',target])
-            await process(['git','-C',target,'-c','protocol.file.allow=never','fetch','--depth=1','--no-tags','--',repo['url'],repo['ref']])
-            commit=(await process(['git','-C',target,'rev-parse','FETCH_HEAD'],capture=True)).decode().strip()
-            await process(['git','-C',target,'-c','core.hooksPath=/dev/null','checkout','--detach','--quiet',commit])
+            if repo.get('kind')=='local':
+                commit=self.copy_local(self.local_source(repo['url']),target)
+            else:
+                await process(['git','init','--quiet',target])
+                await process(['git','-C',target,'-c','protocol.file.allow=never','fetch','--depth=1','--no-tags','--',repo['url'],repo['ref']])
+                commit=(await process(['git','-C',target,'rev-parse','FETCH_HEAD'],capture=True)).decode().strip()
+                await process(['git','-C',target,'-c','core.hooksPath=/dev/null','checkout','--detach','--quiet',commit])
             if any(p.is_symlink() for p in target.rglob('*')):raise Invalid('Repository symlinks are unsupported.')
             actions=[];base=target/'actions'
             if not base.is_dir() or base.is_symlink():raise Invalid('Repository must contain an actions directory.')
@@ -266,15 +322,15 @@ class Repositories:
                 if not directory.is_dir():continue
                 data=await manifest(directory)
                 if any(a['manifest']['id']==data['id'] for a in actions):raise Invalid('Duplicate action ID in repository.')
-                actions.append({'type':f"git-{id}-{data['id']}",'repository_id':id,'commit':commit,'snapshot':snapshot,'directory':str(directory.relative_to(target)),'manifest':data})
+                actions.append({'type':f"git-{id}-{data['id']}",'repository_id':id,'commit':commit,'snapshot':snapshot,'directory':str(directory.relative_to(target)),'manifest':data,'source_kind':repo.get('kind','git')})
             if not actions or len(actions)>64:raise Invalid('Repository must contain 1 to 64 actions.')
-            shutil.rmtree(target/'.git')
+            shutil.rmtree(target/'.git',ignore_errors=True)
             await self.update(id,status='Ready',actions=actions,commit=commit,logs=['Repository validated. No action code was executed.'],updated=stamp())
         except asyncio.CancelledError:
             shutil.rmtree(target,ignore_errors=True);raise
         except Exception:
             shutil.rmtree(target,ignore_errors=True)
-            await self.update(id,status='Failed',logs=['Repository sync failed. Check HTTPS access, Git ref and action manifests. Previous catalog remains available.'])
+            await self.update(id,status='Failed',logs=['Repository sync failed. Check source access, Git ref and action manifests. Previous catalog remains available.'])
         finally:
             self.active_snapshots.discard(snapshot)
             await self.prune_sources()
