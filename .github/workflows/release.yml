@@ -31,16 +31,12 @@ jobs:
         run: python3 scripts/release_metadata.py --tag "$RELEASE_TAG" --repository "$RELEASE_REPOSITORY"
       - name: Test release tooling including Git history ranges
         run: python3 -m unittest discover -s tests -p 'test_release*.py' -v
-      - name: Build amd64 image and run unit/API/package tests
+      - name: Build amd64 release image once
         env:
           BUILD_VERSION: ${{ steps.metadata.outputs.version }}
-        run: ./scripts/test.sh
-      - name: MQTT integration tests
-        run: ./scripts/test-mqtt.sh
-      - name: TLS and topic permissions
-        run: ./scripts/test-mqtt-security.sh
-      - name: Security checks on the tested image
-        run: ./scripts/security-check.sh
+        run: docker compose build --quiet
+      - name: Run all checks in parallel on the release image
+        run: python3 scripts/parallel_checks.py
       - name: Prepare release notes
         id: notes
         env:

@@ -16,13 +16,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Unit and API tests
-        run: ./scripts/test.sh
-      - name: MQTT integration tests
-        run: ./scripts/test-mqtt.sh
-      - name: TLS and topic permissions
-        run: ./scripts/test-mqtt-security.sh
-      - name: Security checks
-        run: ./scripts/security-check.sh
+      - name: Build amd64 image once
+        run: docker compose build --quiet
+      - name: Run all checks in parallel on the built image
+        run: python3 scripts/parallel_checks.py
       - name: Build public source archive
         run: python3 scripts/package.py

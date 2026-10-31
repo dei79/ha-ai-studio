@@ -42,6 +42,8 @@ python3 scripts/package.py
 
 The MQTT check uses three temporary isolated Mosquitto brokers, never personal credentials. For local subpath testing run `docker compose --profile ingress up -d` and open http://localhost:8100/api/hassio_ingress/dev-check/. This is not a live HA authentication test.
 
+CI builds the amd64 image once, running the React regression tests and TypeScript checks in its frontend build stage, then runs unit/API/package, MQTT, TLS/topic-permission and security checks concurrently on that image with `python3 scripts/parallel_checks.py`. For the same checks locally, run `docker compose build --quiet` first. The runner prints grouped logs and waits for every check; any failure blocks publication. Release CI pushes the exact tested image only after all checks pass. `./scripts/test.sh` still builds by default; `--skip-build` uses the existing image.
+
 ## Repository layout
 
 - `ha_ai_studio/`: installable HA app, Python runtime, React/TypeScript/SCSS frontend, dependency locks and user guide.
