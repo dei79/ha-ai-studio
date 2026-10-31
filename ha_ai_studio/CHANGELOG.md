@@ -1,3 +1,9 @@
+## 0.0.10
+
+- Add Home Assistant entity search and scoped camera/illumination access for Actions.
+- Support reference image capture and live camera progress with wait diagnostics.
+- Support an optional discarded warm-up frame and local HA connection overrides.
+
 ## 0.0.9
 
 - Add private image assets and isolated previews for complex Actions.

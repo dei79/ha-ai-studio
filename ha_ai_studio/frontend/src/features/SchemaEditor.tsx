@@ -1,4 +1,9 @@
-import { useEffect, useRef } from "react";
+import {
+  EntityPicker,
+  type EntityPickerOptions,
+  type HAEntity,
+} from "./EntityPicker";
+import { useEffect, useRef, useState } from "react";
 import { Checkbox, Input, Select, Textarea } from "../design-system";
 import { appUrl } from "../lib/api";
 import type { Json, Schema } from "../lib/types";
@@ -149,6 +154,7 @@ export function SchemaEditor({
   );
 }
 interface EditorContext {
+  pickEntity: (options: EntityPickerOptions) => Promise<HAEntity | null>;
   changed: () => void;
   uploadImage: (
     file: File,
@@ -156,6 +162,12 @@ interface EditorContext {
   assetUrl: (id: string) => string;
   removeImage: (id: string) => Promise<unknown>;
   preview: (data: Json, settings: Json) => Promise<Json>;
+  cameraTest: (
+    data: Json,
+    settings: Json,
+    progress?: (entries: { time: string; message: string }[]) => void,
+    captureOnly?: boolean,
+  ) => Promise<Json>;
   previewImageUrl: (run: string, name: string) => string;
 }
 interface EditorModule {
@@ -186,6 +198,15 @@ export function LegacyEditor({
   onChange: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const [picker, setPicker] = useState<EntityPickerOptions | null>(null);
+  const pickerResolve = useRef<((entity: HAEntity | null) => void) | null>(
+    null,
+  );
+  function finishPicker(entity: HAEntity | null) {
+    pickerResolve.current?.(entity);
+    pickerResolve.current = null;
+    setPicker(null);
+  }
   const callbacks = useRef({ onReady, onError, onChange, onBusy });
   callbacks.current = { onReady, onError, onChange, onBusy };
   useEffect(() => {
@@ -232,6 +253,12 @@ export function LegacyEditor({
       .then((module: EditorModule) => {
         if (!cancelled) {
           const result = module.render(element, structuredClone(settings), {
+            pickEntity: (options) =>
+              new Promise((resolve) => {
+                pickerResolve.current?.(null);
+                pickerResolve.current = resolve;
+                setPicker(options);
+              }),
             removeImage: (id) => post("action-asset-delete", { id }),
             assetUrl: (id) => endpoint("action-asset", { asset: id }),
             previewImageUrl: (run, name) =>
@@ -244,6 +271,45 @@ export function LegacyEditor({
               for (let i = 0; i < bytes.length; i += 8192)
                 binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
               return await post("action-asset", { base64: btoa(binary) });
+            },
+            cameraTest: async (data, draft, progress, captureOnly = false) => {
+              const run = crypto.randomUUID().replaceAll("-", "");
+              let stopped = false;
+              let seen = 0;
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              const readProgress = async () => {
+                try {
+                  const response = await fetch(
+                    endpoint("camera-test-progress", { run }),
+                    { signal: abort.signal },
+                  );
+                  if (response.ok && !cancelled) {
+                    const body = await response.json();
+                    if (!cancelled && body.entries.length >= seen) {
+                      seen = body.entries.length;
+                      progress?.(body.entries);
+                    }
+                  }
+                } catch {
+                  /* The execution response owns errors; polling is best effort. */
+                }
+              };
+              const poll = async () => {
+                await readProgress();
+                if (!stopped && !cancelled) timer = setTimeout(poll, 500);
+              };
+              void poll();
+              try {
+                return await post(captureOnly ? "action-camera-reference" : "action-camera-test", {
+                  data,
+                  settings: draft,
+                  progress_id: run,
+                });
+              } finally {
+                stopped = true;
+                clearTimeout(timer);
+                await readProgress();
+              }
             },
             preview: (data, draft) =>
               post("action-preview", { data, settings: draft }),
@@ -267,6 +333,9 @@ export function LegacyEditor({
     return () => {
       cancelled = true;
       abort.abort();
+      pickerResolve.current?.(null);
+      pickerResolve.current = null;
+      setPicker(null);
       callbacks.current.onBusy?.(false);
       try {
         dispose?.();
@@ -280,5 +349,16 @@ export function LegacyEditor({
       }
     };
   }, [type, editor, settings, actionId]);
-  return <div ref={host} />;
+  return (
+    <>
+      <div ref={host} />
+      {picker && (
+        <EntityPicker
+          options={picker}
+          onSelect={finishPicker}
+          onClose={() => finishPicker(null)}
+        />
+      )}
+    </>
+  );
 }

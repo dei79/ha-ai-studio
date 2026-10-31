@@ -127,7 +127,7 @@ async def manifest(root):
         value=json.loads(path.read_text())
         if set(value)-{'id','name','description','version','python','entrypoint','settings_schema','input_schema','output_schema','example','editor','capabilities'}:raise ValueError()
         capabilities=value.get('capabilities',[])
-        if not isinstance(capabilities,list) or any(c not in ('assets','preview') for c in capabilities) or len(set(capabilities))!=len(capabilities):raise Invalid('Invalid action capabilities.')
+        if not isinstance(capabilities,list) or any(c not in ('assets','preview','home_assistant') for c in capabilities) or len(set(capabilities))!=len(capabilities):raise Invalid('Invalid action capabilities.')
         for key in ('id','name','description','version','python','entrypoint','settings_schema'):
             if key not in value:raise ValueError()
         if not re.fullmatch('[a-z][a-z0-9-]{0,47}',value['id']):raise ValueError()
@@ -409,8 +409,20 @@ class Environment:
         if self.plugin.manifest.get('capabilities'):
             request['context']={'mode':mode,'assets_dir':str(self.store.root/'assets')}
             if output is not None:request['context']['output_dir']=str(output)
-        response=await process([self.path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,
-            payload=json.dumps(request,allow_nan=False).encode(),capture=True,timeout=30,venv=self.path)
+        async def run_process(timeout):
+            return await process([self.path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,
+                payload=json.dumps(request,allow_nan=False).encode(),capture=True,timeout=timeout,venv=self.path)
+        if mode in ('execute','camera_test','reference_capture') and 'home_assistant' in self.plugin.manifest.get('capabilities',[]):
+            gateway=getattr(self,'home_assistant',None)
+            if gateway is None:raise Invalid('Home Assistant execution support is unavailable.')
+            async with gateway.session(settings) as access:
+                request['context']['home_assistant']=access
+                from .test_progress import current
+                log=current.get() or (lambda message:None)
+                log('Starting reference capture. Configured delays apply between device operations.' if mode=='reference_capture' else 'Starting capture and recognition process. Configured delays apply between device operations.')
+                response=await run_process(180)
+                log('Reference capture finished. Validating images.' if mode=='reference_capture' else 'Recognition process finished. Validating results and report.')
+        else:response=await run_process(30)
         try:
             value=json.loads(response,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
             if not isinstance(value,dict) or set(value)!={'data'} or not await schema_valid(self.plugin.manifest.get('output_schema',{}),value['data']):raise ValueError()

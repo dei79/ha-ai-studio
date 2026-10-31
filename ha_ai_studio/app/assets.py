@@ -86,10 +86,11 @@ class ActionAssets:
         return {'deleted':True}
 
 
-async def preview(service,value):
+async def preview(service,value,*,camera=False,reference=False):
     service.ensure_idle()
     if not service.environment or 'preview' not in service.plugin.manifest.get('capabilities',[]):
         raise Invalid('This action does not declare an isolated preview contract.')
+    if camera and 'home_assistant' not in service.plugin.manifest.get('capabilities',[]):raise Invalid('This action does not support camera tests.')
     if not isinstance(value,dict) or set(value)!={'settings','data'}:raise Invalid('Provide preview settings and data.')
     async with service.lock:
         await service.plugin.validate(value['settings'])
@@ -102,7 +103,7 @@ async def preview(service,value):
                 shutil.rmtree(path);previous=previous[1:]
         run=uuid.uuid4().hex;output=root/run;output.mkdir(mode=0o700)
         try:
-            result=await service.environment.preview(value['data'],value['settings'],output)
+            result=await service.environment.invoke(value['data'],value['settings'],'reference_capture' if reference else 'camera_test',output) if camera else await service.environment.preview(value['data'],value['settings'],output)
             files=[];size=0
             for path in output.iterdir():
                 if path.is_symlink() or not path.is_file() or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}\.(png|jpg)',path.name):
@@ -111,7 +112,11 @@ async def preview(service,value):
                 info=image_info(path.read_bytes());size+=info['size']
                 if len(files)>=40 or size>32*1024*1024:raise Invalid('Preview output exceeds its limits.')
                 files.append({'name':path.name,**info})
-            return {'mode':'preview','delivery':'not_sent','result':result,'run':run,'images':files}
+            assets=[]
+            if reference and result.get('status')=='read':
+                for file in sorted(files,key=lambda item:item['name']):
+                    assets.append(await service.assets.upload({'base64':base64.b64encode((output/file['name']).read_bytes()).decode()}))
+            return {'assets':assets,'mode':'preview','delivery':'not_sent','result':result,'run':run,'images':files}
         except BaseException:
             shutil.rmtree(output,ignore_errors=True);raise
 

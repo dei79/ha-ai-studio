@@ -27,6 +27,11 @@ def main():
         if request['mode']=='check':response={'ready':True}
         else:
             handler=module.preview if request['mode']=='preview' else module.execute
+            if request['mode'] in ('execute','camera_test','reference_capture') and 'home_assistant' in request.get('context',{}):
+                # Load Studio's own client, never a similarly named repository module.
+                client_spec=importlib.util.spec_from_file_location('studio_ha_client',Path(__file__).with_name('ha_action_client.py'))
+                client=importlib.util.module_from_spec(client_spec);client_spec.loader.exec_module(client)
+                request['context']['home_assistant']=client.HomeAssistantClient(request['context']['home_assistant'])
             kwargs={'context':request['context']} if 'context' in request else {}
             result=handler(request['data'],request['settings'],**kwargs)
             if inspect.isawaitable(result):result=asyncio.run(result)

@@ -1,5 +1,5 @@
 name: HA AI Studio
-version: "0.0.9"
+version: "0.0.10"
 slug: ha_ai_studio
 description: Your studio for MQTT-driven AI Actions and Home Assistant automations
 arch: [amd64]
@@ -12,6 +12,7 @@ panel_icon: mdi:brain
 panel_title: HA AI Studio
 panel_admin: true
 hassio_api: true
+homeassistant_api: true
 services:
   - mqtt:want
 options: {}

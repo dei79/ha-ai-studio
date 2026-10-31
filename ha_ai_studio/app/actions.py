@@ -56,6 +56,7 @@ class ActionService:
         self.plugin=repositories.bound(definition['plugin']) if definition.get('plugin') and repositories else TYPES.get(self.type)
         self.supported=self.plugin is not None
         self.environment=Environment(self.store,self.plugin) if definition.get('plugin') and self.plugin else None
+        if self.environment:self.environment.home_assistant=getattr(repositories,'home_assistant',None)
         from .assets import ActionAssets
         self.assets=ActionAssets(self)
         self.identity=self.store.read('identity.json')
@@ -134,6 +135,11 @@ class ActionService:
     def status(self):
         issues=[]
         if self.environment and not self.environment.ready:issues.append('Execution blocked: Python environment is not ready. Deactivate and rebuild it.')
+        gateway=getattr(self.environment,'home_assistant',None) if self.environment else None
+        if gateway:
+            from .home_assistant import configured_entities
+            configured=configured_entities(self.config['draft']['settings']) | configured_entities((self.config.get('active') or {}).get('settings',{}))
+            if configured & set(gateway.pending):issues.append('Illumination restoration is pending. Studio will retry; check the light. New captures are blocked until restoration succeeds.')
         if self.enabled:
             try:self.check_routes(self.config['active'])
             except Invalid as exc:issues.append(str(exc))
@@ -294,6 +300,8 @@ class Studio:
     def __init__(self,root):
         self.store=Store(root);self.lock=asyncio.Lock();self.running=False
         self.repositories=Repositories(root)
+        from .home_assistant import HomeAssistant
+        self.home_assistant=HomeAssistant(root);self.repositories.home_assistant=self.home_assistant
         # Preserve the registry, paths and protocol namespace across the public rename.
         self.registry=self.store.read('agents.json',{'agents':[],'legacy_id':None})
         identity=self.store.read('identity.json')
@@ -374,6 +382,7 @@ class Studio:
                 await service.close()
                 return self.list()
     async def start(self):
+        self.home_assistant.start()
         self.repositories.start()
         await self.brokers.refresh();self.running=True
         self.discovery.task=asyncio.create_task(self.discovery.run())
@@ -383,3 +392,4 @@ class Studio:
         await self.repositories.close()
         for service in self.services.values():await service.close()
         await self.discovery.close()
+        await self.home_assistant.close()

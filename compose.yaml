@@ -9,6 +9,9 @@ services:
     image: ha-ai-studio:dev
     platform: linux/amd64
     environment:
+      HA_ADDRESS_FAMILY: ${HA_ADDRESS_FAMILY:-auto}
+      HA_URL: ${HA_URL:-}
+      HA_ACCESS_TOKEN: ${HA_ACCESS_TOKEN:-}
       DEV_MQTT_HOST: ${DEV_MQTT_HOST:-}
       DEV_MQTT_PORT: ${DEV_MQTT_PORT:-1883}
       DEV_MQTT_USERNAME: ${DEV_MQTT_USERNAME:-}

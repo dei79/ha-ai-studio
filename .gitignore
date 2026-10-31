@@ -16,3 +16,6 @@ dist/
 # Generated browser captures and OS metadata
 .DS_Store
 docs/ui-*.png
+
+# Private local Docker DNS overrides (may contain private hostnames/addresses)
+compose.override.yaml

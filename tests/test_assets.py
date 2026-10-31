@@ -96,3 +96,55 @@ class AssetsTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.TimeoutError):await preview(service,{'data':{},'settings':{}})
         self.assertEqual((service.config,service.jobs,service.last),before)
         self.assertEqual(list((service.store.root/'previews').iterdir()),[])
+
+    async def test_camera_test_requires_capability_and_preserves_state(self):
+        service=self.studio.get('first');before=copy.deepcopy((service.config,service.jobs,service.last))
+        response=await self.post('action-camera-test',{'data':{},'settings':{}})
+        self.assertEqual(response.status,400)
+        service.plugin.manifest['capabilities'].append('home_assistant')
+        async def invoke(data,settings,mode,output):
+            self.assertEqual(mode,'camera_test')
+            (output/'capture.png').write_bytes(PNG)
+            return {'camera':True}
+        with patch.object(service.environment,'invoke',invoke):
+            response=await self.post('action-camera-test',{'data':{},'settings':{}})
+        self.assertEqual(response.status,200,await response.text())
+        result=await response.json();self.assertEqual(result['delivery'],'not_sent')
+        self.assertEqual(result['result'],{'camera':True})
+        self.assertEqual((service.config,service.jobs,service.last),before)
+        self.assertIsNone(service.mqtt)
+
+    async def test_camera_progress_is_live_scoped_and_preserved_on_failure(self):
+        from app.test_progress import current
+        service=self.studio.get('first');service.plugin.manifest['capabilities'].append('home_assistant')
+        started=asyncio.Event();finish=asyncio.Event();ident='a'*32
+        async def invoke(*args):
+            current.get()('Fetching camera image.');started.set();await finish.wait()
+            raise Invalid('Home Assistant returned HTTP 500 during camera image capture.')
+        with patch.object(service.environment,'invoke',invoke):
+            task=asyncio.create_task(self.post('action-camera-test',{'data':{},'settings':{},'progress_id':ident}))
+            await asyncio.wait_for(started.wait(),3)
+            response=await self.client.get('/api/camera-test-progress',params={'id':'first','run':ident})
+            self.assertIn('Fetching camera image.',[e['message'] for e in (await response.json())['entries']])
+            response=await self.client.get('/api/camera-test-progress',params={'id':'second','run':ident})
+            self.assertEqual((await response.json())['entries'],[])
+            finish.set();self.assertEqual((await task).status,400)
+        response=await self.client.get('/api/camera-test-progress',params={'id':'first','run':ident})
+        self.assertIn('HTTP 500',(await response.json())['entries'][-1]['message'])
+        self.assertEqual(service.jobs,{})
+
+    async def test_reference_capture_imports_private_assets_without_changing_config(self):
+        service=self.studio.get('first');service.plugin.manifest['capabilities'].append('home_assistant')
+        before=copy.deepcopy((service.config,service.jobs))
+        async def invoke(data,settings,mode,output):
+            self.assertEqual(mode,'reference_capture')
+            (output/'reference-1.png').write_bytes(PNG)
+            (output/'reference-2.png').write_bytes(PNG)
+            return {'status':'read'}
+        with patch.object(service.environment,'invoke',invoke):
+            response=await self.post('action-camera-reference',{'data':{},'settings':{},'progress_id':'b'*32})
+        self.assertEqual(response.status,200,await response.text())
+        result=await response.json();self.assertEqual(len(result['assets']),2)
+        self.assertEqual(service.assets.path(result['assets'][0]['id']).read_bytes(),PNG)
+        with self.assertRaises(Invalid):self.studio.get('second').assets.path(result['assets'][0]['id'])
+        self.assertEqual((service.config,service.jobs),before)

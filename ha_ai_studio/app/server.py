@@ -55,7 +55,7 @@ def create_app(root=None, dev=None):
 
     async def api(request):
         action = request.match_info['action']
-        if action in ('action-asset','action-asset-delete','action-preview','preview-image'):
+        if action in ('action-asset','action-asset-delete','action-preview','action-camera-test','action-camera-reference','preview-image'):
             from .assets import preview,preview_path
             service=studio.get(request.query.get('id'))
             if action=='action-asset':
@@ -64,10 +64,29 @@ def create_app(root=None, dev=None):
                     upload=request.clone(client_max_size=12*1024*1024)
                     return web.json_response(await service.assets.upload(await upload.json()))
             if action=='action-asset-delete' and request.method=='POST':return web.json_response(await service.assets.delete(await request.json()))
-            if action=='action-preview' and request.method=='POST':return web.json_response(await preview(service,await request.json()))
+            if action in ('action-preview','action-camera-test','action-camera-reference') and request.method=='POST':
+                value=await request.json()
+                if action in ('action-camera-test','action-camera-reference') and isinstance(value,dict) and 'progress_id' in value:
+                    from .test_progress import begin,current
+                    service.ensure_idle()
+                    log=begin(service,value.pop('progress_id'));token=current.set(log)
+                    try:
+                        log('Camera test started. Validating configuration.')
+                        result=await preview(service,value,camera=True,reference=action=='action-camera-reference')
+                        log('Camera test completed.' if result['result'].get('status')=='read' else 'Camera test completed with unreadable results.')
+                        return web.json_response(result)
+                    except Invalid as error:log('Failed: '+str(error));raise
+                    except BaseException:log('Camera test failed or was cancelled. Check illumination restoration.');raise
+                    finally:current.reset(token)
+                return web.json_response(await preview(service,value,camera=action!='action-preview',reference=action=='action-camera-reference'))
             if action=='preview-image' and request.method=='GET':
                 return web.FileResponse(preview_path(service,request.query.get('run',''),request.query.get('name','')))
             raise web.HTTPNotFound()
+        if action=='camera-test-progress' and request.method=='GET':
+            from .test_progress import read
+            return web.json_response(read(studio.get(request.query.get('id')),request.query.get('run','')))
+        if action=='ha-entities' and request.method=='GET':
+            return web.json_response(await studio.home_assistant.search(request.query.get('domains','camera,light,switch').split(','),request.query.get('q','')))
         if action == 'repositories':
             if request.method=='GET':return web.json_response(studio.repositories.public())
             if request.method=='POST':return web.json_response(await studio.repositories.save(await request.json()))
