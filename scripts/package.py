@@ -9,7 +9,7 @@ APP_FILES = (
     '.dockerignore', 'config.yaml', 'Dockerfile', 'DOCS.md', 'CHANGELOG.md',
     'LICENSE', 'README.md', 'icon.png', 'logo.png', 'icon.svg', 'THIRD_PARTY.md', 'requirements.txt', 'requirements.lock.txt',
 )
-STATIC_FILES = ('index.html', 'app.js', 'ha-example.js', 'style.css')
+STATIC_FILES = ('index.html', 'app.js', 'ha-example.js', 'schema-editor.js', 'style.css')
 
 
 def public_files(app):
@@ -18,7 +18,7 @@ def public_files(app):
     files += [app / 'app' / 'static' / name for name in STATIC_FILES]
     files += sorted((app / 'app').rglob('*.py'))
     files += [app / 'app' / 'action_types' / 'README.md',
-              app / 'app' / 'action_types' / 'echo' / 'editor.js']
+              app / 'app' / 'action_types' / 'legacy_echo' / 'editor.js']
     for path in files:
         if '__pycache__' in path.parts:
             continue

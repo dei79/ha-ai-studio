@@ -3,7 +3,7 @@ import {mqttTestAutomationYaml} from './ha-example.js';
 const $=id=>document.getElementById(id);
 let current=null,state=null,dirty=false,busy=false,readSettings=null,brokerData=null,catalog=[],deleteTarget=null;
 let brokerEditing=null,brokerDeleteTarget=null,leaveDestination='actions',discoveryDirty=false;
-let discoveryData=null,listSignature=null,repositorySignature=null;
+let discoveryData=null,listSignature=null,repositorySignature=null,environmentState=null,environmentError='',environmentPollError='',repositoryDeleteTarget=null;
 const modules=new Map();
 function renderJson(id,value){
  const code=$(id),source=JSON.stringify(value,null,2);code.replaceChildren();
@@ -18,12 +18,12 @@ function renderJson(id,value){
  code.append(document.createTextNode(source.slice(offset)));
 }
 function iconButton(kind,label){
- const paths={live:'M3 3h18v18H3V3zm3 4v2h12V7H6zm0 4v2h8v-2H6zm0 4v2h12v-2H6z',test:'M8 5v14l11-7z',edit:'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',delete:'M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z'};
+ const paths={refresh:'M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z',installation:'M9 3h6v8h4l-7 7-7-7h4V3zM5 19h14v2H5v-2z',live:'M3 3h18v18H3V3zm3 4v2h12V7H6zm0 4v2h8v-2H6zm0 4v2h12v-2H6z',test:'M8 5v14l11-7z',edit:'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',delete:'M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z'};
  const button=document.createElement('button');button.className='icon-button'+(kind==='delete'?' danger':'');button.title=label;button.setAttribute('aria-label',label);
  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',paths[kind]);svg.append(path);button.append(svg);return button;
 }
-async function api(action,body){
- const url=new URL('api/'+action,document.baseURI);if(current)url.searchParams.set('id',current);
+async function api(action,body,id=current){
+ const url=new URL('api/'+action,document.baseURI);if(id)url.searchParams.set('id',id);
  const response=await fetch(url,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-HA-AI-Studio-Request':'1'},body:body===undefined?undefined:JSON.stringify(body)});
  const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed.');return data;
 }
@@ -32,20 +32,23 @@ async function action(fn){if(busy)return;busy=true;sync();try{await fn();}catch(
 function sync(){
  if(state?.plugin?.dynamic)renderEnvironment(state);
  for(const id of ['save','schemas','create','back','nav-actions','nav-settings','add-broker','refresh-brokers','discovery-refresh'])$(id).disabled=busy;
- $('ha-example').disabled=busy||!state?.supported;
+ $('create').disabled=busy||!catalog.length;
+ $('ha-example').disabled=busy||!state?.supported||!state?.plugin?.example;
+ $('ha-example').title=state?.supported&&!state?.plugin?.example?'No valid example request is available for this action.':'';
  $('save').disabled||=!state?.supported;$('schemas').disabled||=!state?.supported;
  $('config-fields').inert=busy;$('discovery-form').inert=busy;
  document.querySelectorAll('dialog input,dialog select,dialog button').forEach(el=>el.disabled=busy);
+ if(environmentState)renderEnvironmentPanel(environmentState);
  if(state)$('config-status').textContent=state.supported?(dirty?'Unsaved changes':''):'Unsupported legacy action · Disabled';
 }
 function changed(){dirty=true;sync();}
 function readDraft(){return {name:$('action-name').value,input:{broker_id:$('input-broker').value||null,topic:$('input-topic').value},settings:readSettings?readSettings():{},output:{broker_id:$('output-broker').value||null,topic:$('output-topic').value}};}
 function setNav(page){for(const id of ['actions','settings']){if(id===page)$('nav-'+id).setAttribute('aria-current','page');else $('nav-'+id).removeAttribute('aria-current');}}
 async function list(){
- const data=await api('actions');catalog=data.types;const signature=JSON.stringify(data);if(signature===listSignature)return data;listSignature=signature;
- $('action-rows').replaceChildren();$('empty').hidden=!!data.actions.length;
+ const data=await api('actions');catalog=data.types;$('catalog-notice').hidden=!!catalog.length;const signature=JSON.stringify(data);if(signature===listSignature)return data;listSignature=signature;
+ $('action-rows').replaceChildren();$('empty').hidden=!!data.actions.length||!catalog.length;
  for(const item of data.actions){const row=document.createElement('tr');for(const text of [item.definition.name,item.plugin?.name||'Legacy workflow',!item.supported?'Unsupported · Disabled':item.busy?'Busy':item.enabled?'Active':'Inactive',item.environment.status]){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}
- const cell=document.createElement('td');cell.className='row-actions';const edit=iconButton('edit','Edit '+item.definition.name);edit.onclick=()=>action(()=>openAction(item.definition.id));const remove=iconButton('delete','Delete '+item.definition.name);remove.disabled=item.busy;remove.onclick=()=>{if(busy)return;deleteTarget=item.definition;$('delete-description').textContent=`Delete “${deleteTarget.name}”?`;$('delete-error').textContent='';$('delete-panel').showModal();};const live=iconButton('live','Live activity '+item.definition.name);live.onclick=()=>action(()=>openLive(item.definition.id,item.definition.name));cell.append(live,edit,remove);row.append(cell);$('action-rows').append(row);}
+ const cell=document.createElement('td');cell.className='row-actions';const edit=iconButton('edit','Edit '+item.definition.name);edit.onclick=()=>action(()=>openAction(item.definition.id));const remove=iconButton('delete','Delete '+item.definition.name);remove.disabled=item.busy;remove.onclick=()=>{if(busy)return;deleteTarget=item.definition;$('delete-description').textContent=`Delete “${deleteTarget.name}”?`;$('delete-error').textContent='';$('delete-panel').showModal();};const live=iconButton('live','Live activity '+item.definition.name);live.onclick=()=>action(()=>openLive(item.definition.id,item.definition.name));if(item.plugin?.dynamic){const installation=iconButton('installation','Installation details '+item.definition.name);installation.onclick=()=>action(()=>openEnvironment(item.definition.id));cell.append(installation);}cell.append(live,edit,remove);row.append(cell);$('action-rows').append(row);}
  return data;
 }
 function brokerOptions(id,value,same){const select=$(id);select.replaceChildren();const blank=document.createElement('option');blank.value='';blank.textContent=same?'Same as input':'Select a broker';select.append(blank);for(const b of brokerData.brokers){const option=document.createElement('option');option.value=b.id;option.textContent=b.name+(b.id===brokerData.default_id?' · HA default':'');select.append(option);}if(value&&!brokerData.brokers.some(b=>b.id===value)){const option=document.createElement('option');option.value=value;option.textContent='Unavailable broker';select.append(option);}select.value=value||'';}
@@ -157,7 +160,7 @@ async function testBroker(broker){
 $('close-broker-test').onclick=()=>{if(!busy)$('broker-test-panel').close();};
 
 $('ha-example').onclick=()=>{
- if(busy||!state?.supported)return;
+ if(busy||!state?.supported||!state?.plugin?.example)return;
  const config=state.enabled?state.config.active:readDraft();
  const broker=brokerData.brokers.find(b=>b.id===config.input.broker_id);
  $('ha-example-source').textContent=state.enabled?'Uses the active configuration. Unsaved edits and draft changes are not included.':'Draft example. Save and activate this action before running the test.';
@@ -204,25 +207,39 @@ $('live-pause').onclick=()=>{livePaused=!livePaused;$('live-pause').textContent=
 
 async function renderRepositories(){
  const data=await api('repositories');const signature=JSON.stringify(data);if(signature===repositorySignature)return;repositorySignature=signature;$('repository-rows').replaceChildren();
- for(const repo of data.repositories){const row=document.createElement('tr');for(const text of [repo.url,repo.ref,repo.status,repo.actions.map(a=>a.manifest.name+' '+a.manifest.version).join(', ')||'—']){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');const refresh=document.createElement('button');refresh.textContent='Refresh';refresh.disabled=repo.status==='Syncing';refresh.onclick=()=>action(async()=>{await api('repository-refresh',{id:repo.id});await renderRepositories();});cell.append(refresh);row.append(cell);$('repository-rows').append(row);if(repo.status==='Failed'){const detail=document.createElement('tr');const message=document.createElement('td');message.colSpan=5;message.textContent=repo.logs.join(' ');detail.append(message);$('repository-rows').append(detail);}}
+ for(const repo of data.repositories){const row=document.createElement('tr');for(const text of [repo.url,repo.system?'System':'User',repo.ref,repo.status,repo.actions.map(a=>a.manifest.name+' '+a.manifest.version).join(', ')||'—']){const cell=document.createElement('td');cell.textContent=text;row.append(cell);}const cell=document.createElement('td');cell.className='row-actions';const refresh=iconButton('refresh','Refresh repository '+repo.url);refresh.disabled=repo.refreshing;refresh.onclick=()=>action(async()=>{await api('repository-refresh',{id:repo.id});await renderRepositories();});cell.append(refresh);const remove=iconButton('delete','Delete repository '+repo.url);remove.disabled=!repo.can_delete;remove.title=repo.delete_reason||'Delete repository';remove.onclick=()=>{if(busy)return;repositoryDeleteTarget=repo;$('repository-delete-name').textContent=`Delete “${repo.url}” (${repo.ref})?`;$('repository-delete-error').textContent='';$('repository-delete-panel').showModal();};cell.append(remove);row.append(cell);$('repository-rows').append(row);if(repo.status==='Failed'){const detail=document.createElement('tr');const message=document.createElement('td');message.colSpan=6;message.textContent=repo.logs.join(' ');detail.append(message);$('repository-rows').append(detail);}}
 }
 $('add-repository').onclick=()=>{if(busy)return;$('repository-form').reset();$('repository-error').textContent='';$('repository-panel').showModal();};
 $('close-repository').onclick=()=>{if(!busy)$('repository-panel').close();};
 $('repository-form').onsubmit=event=>{event.preventDefault();action(async()=>{try{await api('repositories',{url:$('repository-url').value,ref:$('repository-ref').value});$('repository-panel').close();await renderRepositories();}catch(error){$('repository-error').textContent=error.message;}});};
+for(const id of ['close-repository-delete','repository-delete-cancel'])$(id).onclick=()=>{if(!busy)$('repository-delete-panel').close();};
+$('repository-delete-confirm').onclick=()=>action(async()=>{try{await api('repository-delete',{id:repositoryDeleteTarget.id,confirmed:true});$('repository-delete-panel').close();await renderRepositories();await list();message('Repository deleted.');}catch(error){$('repository-delete-error').textContent=error.message;}});
 function renderEnvironment(value){
- const dynamic=!!value.plugin?.dynamic,e=value.environment;$('environment-card').hidden=!dynamic;$('action-active').disabled=dynamic&&e.status!=='Ready'&&!value.enabled;if(!dynamic)return;
+ const dynamic=!!value.plugin?.dynamic,e=value.environment;$('action-active').disabled=dynamic&&e.status!=='Ready'&&!value.enabled;if(!dynamic)return;
  $('config-error').textContent=value.issues.join(' ');$('config-error').hidden=!value.issues.length;
- $('environment-status').textContent=e.status;$('environment-version').textContent=`Version ${value.plugin.version} · Commit ${value.plugin.commit}`;
- const installing=['Queued','Installing','Verifying'].includes(e.status);$('environment-rebuild').disabled=busy||value.enabled||value.busy||installing;
- $('environment-name').textContent=value.definition.name;$('environment-detail-status').textContent=e.status;
- $('environment-summary').dataset.state=e.status==='Ready'?'success':e.status==='Failed'?'error':'pending';$('environment-log').textContent=e.logs.join('\n');
-
 }
-$('environment-open').onclick=()=>$('environment-panel').showModal();
+function renderEnvironmentPanel(value){
+ const error=environmentError||environmentPollError;$('environment-error').textContent=error;$('environment-error').hidden=!error;
+ const e=value.environment,installing=['Queued','Installing','Verifying'].includes(e.status);
+ $('environment-name').textContent=value.definition.name;$('environment-detail-status').textContent=e.status;
+ $('environment-detail-version').textContent=`Version ${value.plugin.version} · Commit ${value.plugin.commit}`;
+ $('environment-summary').dataset.state=e.status==='Ready'?'success':e.status==='Failed'?'error':'pending';$('environment-log').textContent=e.logs.join('\n');
+ $('environment-rebuild').disabled=busy||value.enabled||value.busy||installing;
+ $('environment-help').textContent=value.enabled?'Deactivate the action before rebuilding its environment.':installing?'Environment installation is running.':value.busy?'Wait for the current operation to finish before rebuilding.':'';
+}
+async function openEnvironment(id){
+ environmentError='';environmentPollError='';environmentState=await api('action',undefined,id);renderEnvironmentPanel(environmentState);$('environment-panel').showModal();
+}
 $('close-environment').onclick=()=>$('environment-panel').close();
-$('environment-refresh').onclick=()=>action(async()=>{const value=await api('action');state=value;renderEnvironment(value);});
-$('environment-rebuild').onclick=()=>action(async()=>{state=await api('environment',{});renderEnvironment(state);$('environment-panel').showModal();});
+$('environment-panel').addEventListener('close',()=>{environmentState=null;environmentError='';environmentPollError='';});
+async function updateEnvironment(endpoint,body){
+ const id=environmentState.definition.id;environmentError='';environmentPollError='';renderEnvironmentPanel(environmentState);
+ try{const value=await api(endpoint,body,id);if(environmentState?.definition.id===id){environmentState=value;renderEnvironmentPanel(value);}}
+ catch(error){if(environmentState?.definition.id===id){environmentError=error.message;renderEnvironmentPanel(environmentState);}}
+}
+$('environment-refresh').onclick=()=>action(()=>updateEnvironment('action',undefined));
+$('environment-rebuild').onclick=()=>action(()=>updateEnvironment('environment',{}));
 setInterval(async()=>{
  if(busy)return;
- try{if(!$('settings-page').hidden){await renderRepositories();}else if(!$('actions').hidden&&!document.querySelector('dialog[open]')){await list();}else if(current&&state?.plugin?.dynamic&&!$('editor').hidden){const id=current;const value=await api('action');if(current===id){state.environment=value.environment;state.busy=value.busy;state.issues=value.issues;renderEnvironment(state);}}}catch{}
+ try{if(environmentState&&$('environment-panel').open){const id=environmentState.definition.id;try{const value=await api('action',undefined,id);if(environmentState?.definition.id===id){environmentState=value;environmentPollError='';renderEnvironmentPanel(value);}}catch(error){if(environmentState?.definition.id===id){environmentPollError=error.message;renderEnvironmentPanel(environmentState);}}}else if(!$('settings-page').hidden){await renderRepositories();}else if(!$('actions').hidden&&!document.querySelector('dialog[open]')){await list();}else if(current&&state?.plugin?.dynamic&&!$('editor').hidden){const id=current;const value=await api('action');if(current===id){state.environment=value.environment;state.busy=value.busy;state.issues=value.issues;renderEnvironment(state);}}}catch{}
 },2000);

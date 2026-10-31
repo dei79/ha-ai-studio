@@ -18,6 +18,9 @@ def broker(host='broker'):
 
 class Actions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # Historical instances: temporarily expose the old type only in this fixture.
+        from app.action_types import TYPES
+        legacy_catalog=patch("app.actions.CATALOG",[TYPES["echo"].metadata]);legacy_catalog.start();self.addCleanup(legacy_catalog.stop)
         self.tmp=tempfile.TemporaryDirectory();self.studio=Studio(self.tmp.name)
         await self.studio.create({'id':'echo','name':'Echo test','type':'echo'});self.s=self.studio.get('echo')
         self.a=(await self.studio.brokers.save(broker()))['brokers'][0]['id']
@@ -240,6 +243,10 @@ class Actions(unittest.IsolatedAsyncioTestCase):
 
 class API(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        source_start=patch("app.plugins.Repositories.start");source_start.start();self.addCleanup(source_start.stop)
+        # Historical instances: temporarily expose the old type only in this fixture.
+        from app.action_types import TYPES
+        legacy_catalog=patch("app.actions.CATALOG",[TYPES["echo"].metadata]);legacy_catalog.start();self.addCleanup(legacy_catalog.stop)
         self.tmp=tempfile.TemporaryDirectory();self.client=TestClient(TestServer(create_app(self.tmp.name,dev=True)));await self.client.start_server()
     async def asyncTearDown(self):await self.client.close();self.tmp.cleanup()
     async def post(self,path,body):return await self.client.post(path,json=body,headers={'X-HA-AI-Studio-Request':'1'})
@@ -254,3 +261,54 @@ class API(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/api/actions',json={})).status,403)
         html=await (await self.client.get('/')).text();self.assertIn('src="static/app.js"',html)
         js=await (await self.client.get('/static/app.js')).text();self.assertIn("new URL('api/'+action,document.baseURI)",js);self.assertIn('../action-types/${type}/editor.js',js)
+
+
+class ExternalCatalog(unittest.IsolatedAsyncioTestCase):
+    async def test_no_builtin_creation_and_existing_identity_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            studio=Studio(root)
+            self.assertEqual(studio.list()['types'],[])
+            with self.assertRaises(Invalid):await studio.create({'id':'new','name':'New Echo','type':'echo'})
+            # Reconstruct a saved pre-extraction instance using the historical fixture.
+            with patch('app.actions.CATALOG',[TYPES['echo'].metadata]):
+                await studio.create({'id':'existing','name':'Existing Echo','type':'echo'})
+            old=studio.get('existing');identity=copy.deepcopy(old.identity)
+            old.store.write('action-jobs.json',{'historical':{'digest':'original','config':old.config['draft'],'execution':'success','delivery':'published','result':{'request_id':'historical','status':'success','data':42}}})
+            await studio.close();restored=Studio(root);service=restored.get('existing')
+            self.assertTrue(service.supported);self.assertEqual(service.identity,identity)
+            self.assertEqual(service.jobs['historical']['result']['data'],42)
+            self.assertEqual((await service.test(service.config['draft'],'{"request_id":"preview","data":null}'))['result']['data'],None)
+            self.assertEqual(restored.list()['types'],[])
+            with self.assertRaises(Invalid):await restored.create({'id':'another','name':'Another Echo','type':'echo'})
+            await restored.close()
+
+    @patch('app.plugins.Repositories.start')
+    async def test_api_rejects_builtin_and_keeps_compatibility_editor(self,source_start):
+        with tempfile.TemporaryDirectory() as root:
+            client=TestClient(TestServer(create_app(root,dev=True)));await client.start_server()
+            try:
+                result=await client.get('/api/actions');self.assertEqual((await result.json())['types'],[])
+                result=await client.post('/api/actions',json={'id':'new','name':'New Echo','type':'echo'},headers={'X-HA-AI-Studio-Request':'1'})
+                self.assertEqual(result.status,400)
+                self.assertEqual((await client.get('/action-types/echo/editor.js')).status,200)
+            finally:await client.close()
+
+
+class RepositoryAPI(unittest.IsolatedAsyncioTestCase):
+    @patch('app.plugins.Repositories.start')
+    async def test_delete_endpoint_enforces_source_ownership(self,source_start):
+        from app.plugins import DEFAULT_REPOSITORY_URL
+        with tempfile.TemporaryDirectory() as root:
+            app=create_app(root,dev=True);studio=next(v for v in app.values() if isinstance(v,Studio))
+            studio.repositories.state={'repositories':[
+                {'id':'system','url':DEFAULT_REPOSITORY_URL,'ref':'main','status':'Ready','actions':[],'logs':[]},
+                {'id':'custom','url':'https://example.invalid/custom.git','ref':'main','status':'Ready','actions':[],'logs':[]}]}
+            client=TestClient(TestServer(app));await client.start_server()
+            try:
+                headers={'X-HA-AI-Studio-Request':'1'}
+                response=await client.post('/api/repository-delete',json={'id':'system','confirmed':True},headers=headers)
+                self.assertEqual(response.status,400)
+                response=await client.post('/api/repository-delete',json={'id':'custom','confirmed':True},headers=headers)
+                self.assertEqual(response.status,200)
+                self.assertEqual([r['id'] for r in (await response.json())['repositories']],['system'])
+            finally:await client.close()

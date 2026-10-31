@@ -1,3 +1,16 @@
+## 0.0.3
+
+- Install dynamic action types from Git repositories into isolated per-instance Python environments with pinned commits and locked dependencies.
+- Move new Echo instances to the separate Actions Core repository while preserving existing bundled Echo instances and their identities.
+- Include Actions Core as a protected System repository; allow deletion of unused user repositories.
+- Show installation details from the Actions table, with status, version, logs and environment rebuild controls in a side panel.
+- Align Settings cards and use consistent borderless repository action buttons.
+- Fix environment executable lookup, manifest message schemas, optional numeric settings and visible installation errors.
+- Bound subprocess output and cleanup, validate execute signatures before Ready, and validate request examples before offering Home Assistant test templates.
+- Add Python and frontend regression coverage for repository lifecycle, isolated execution and failure recovery.
+
+Known limitation: plugin schema validation still runs in the server process. Certain regular expressions can block the app; bounded schema validation remains an open high-priority issue. This release remains experimental and amd64-only.
+
 ## 0.0.2
 
 - Add app store branding with an icon, logo and an introduction to AI Actions.

@@ -1,4 +1,4 @@
-"""Echo is a technical transport test, not an AI model."""
+"""Frozen compatibility runtime for saved Echo instances; new Echo comes from Git."""
 import copy
 from ...domain import Invalid
 

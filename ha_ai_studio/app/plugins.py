@@ -19,39 +19,76 @@ from jsonschema import Draft202012Validator
 from .domain import Invalid, stamp
 from .store import Store
 
+DEFAULT_REPOSITORY_URL = 'https://github.com/ha-ai-studio/ha-ai-studio-actions-core.git'
+DEFAULT_REPOSITORY_REF = 'main'
 RUNNER = Path(__file__).with_name('plugin_runner.py')
 SCHEMA = {'type':'object','required':['request_id','data'],'additionalProperties':False,
           'properties':{'request_id':{'type':'string','minLength':1,'maxLength':128},'data':{}}}
 OUTPUT = {'type':'object','required':['request_id','status','data'],'additionalProperties':False,
           'properties':{'request_id':{'type':'string'},'status':{'const':'success'},'data':{}}}
 
-async def process(args, *, cwd=None, payload=None, timeout=120, capture=False):
+def kill_group(pid):
+    try:os.killpg(pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+
+class CommandProtocol(asyncio.SubprocessProtocol):
+    """Keep draining stdout after the quota is hit; never buffer unbounded output."""
+    def __init__(self,payload,capture):
+        loop=asyncio.get_running_loop()
+        self.exited=loop.create_future();self.closed=loop.create_future()
+        self.payload=payload;self.capture=capture;self.chunks=[];self.size=0;self.exceeded=False
+    def connection_made(self,transport):
+        self.transport=transport
+        if self.payload is not None:
+            pipe=transport.get_pipe_transport(0)
+            pipe.write(self.payload);pipe.close()
+            self.payload=None
+    def pipe_data_received(self,fd,data):
+        if fd!=1 or not self.capture or self.exceeded:return
+        self.size+=len(data)
+        if self.size>65536:
+            self.exceeded=True;self.chunks.clear();kill_group(self.transport.get_pid())
+        else:self.chunks.append(data)
+    def process_exited(self):
+        if not self.exited.done():self.exited.set_result(None)
+    def connection_lost(self,error):
+        if not self.closed.done():self.closed.set_result(None)
+
+async def process(args, *, cwd=None, payload=None, timeout=120, capture=False, venv=None):
     # Deliberately exclude Supervisor tokens, dev broker credentials and Git helpers.
     env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(cwd or '/tmp'),
          'LANG':'C.UTF-8','GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_NOSYSTEM':'1',
          'GIT_CONFIG_GLOBAL':'/dev/null','PIP_CONFIG_FILE':os.devnull,'PYTHONUNBUFFERED':'1'}
-    proc=await asyncio.create_subprocess_exec(*map(str,args),cwd=cwd,env=env,
+    if venv is not None:
+        env['PATH']=str(Path(venv)/'bin')+os.pathsep+env['PATH']
+        env['VIRTUAL_ENV']=str(venv)
+    protocol=CommandProtocol(payload,capture)
+    transport,_=await asyncio.get_running_loop().subprocess_exec(lambda:protocol,*map(str,args),cwd=cwd,env=env,
         stdin=asyncio.subprocess.PIPE if payload is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE if capture else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,start_new_session=True)
-    async def communicate():
-        if payload is not None:
-            proc.stdin.write(payload);await proc.stdin.drain();proc.stdin.close()
-        chunks=[];size=0
-        if capture:
-            while chunk:=await proc.stdout.read(8192):
-                size+=len(chunk)
-                if size>65536:raise Invalid('Action response exceeds 65536 bytes.')
-                chunks.append(chunk)
-        await proc.wait()
-        if proc.returncode:raise Invalid('Process failed. Check the repository contract and dependencies.')
-        return b''.join(chunks)
-    try:return await asyncio.wait_for(communicate(),timeout)
+    try:
+        await asyncio.wait_for(asyncio.shield(protocol.exited),timeout)
     finally:
-        # Also stop descendants left behind by a timed-out or completed plugin.
-        try:os.killpg(proc.pid,signal.SIGKILL)
-        except ProcessLookupError:pass
-        await proc.wait()
+        # Reap the process group and drain remaining pipe data, including on timeout
+        # or cancellation. Escaped descendants cannot hold cleanup open indefinitely.
+        kill_group(transport.get_pid())
+        try:await asyncio.wait_for(asyncio.shield(protocol.closed),2)
+        except asyncio.TimeoutError:pass
+        finally:transport.close()
+    if protocol.exceeded:raise Invalid('Action response exceeds 65536 bytes.')
+    if transport.get_returncode():raise Invalid('Process failed. Check the repository contract and dependencies.')
+    return b''.join(protocol.chunks)
+
+
+def valid_example(value,data_schema):
+    try:
+        if not Draft202012Validator(SCHEMA).is_valid(value):return False
+        ident=value['request_id']
+        if not ident.strip() or any(ord(c)<32 for c in ident):return False
+        encoded=json.dumps(value,allow_nan=False,ensure_ascii=False).encode('utf-8')
+        return len(encoded)<=16384 and Draft202012Validator(data_schema).is_valid(value['data'])
+    except (ValueError,TypeError,UnicodeError,RecursionError):return False
 
 
 def local_file(root, relative):
@@ -82,7 +119,8 @@ def manifest(root):
             if '"$ref"' in json.dumps(schema) or '"$dynamicRef"' in json.dumps(schema):raise ValueError()
             Draft202012Validator.check_schema(schema)
         if value['settings_schema'].get('type')!='object':raise ValueError()
-        json.dumps(value.get('example'),allow_nan=False)
+        if 'example' in value and not valid_example(value['example'],value.get('input_schema',{})):
+            raise Invalid('Example must be a valid request matching the input schema.')
         return value
     except Invalid:raise
     except Exception:raise Invalid('Invalid action manifest.') from None
@@ -90,9 +128,14 @@ def manifest(root):
 class GitPlugin:
     def __init__(self,record,source):
         self.record=copy.deepcopy(record);self.source=Path(source);self.manifest=record['manifest']
+        input_schema=copy.deepcopy(SCHEMA);output_schema=copy.deepcopy(OUTPUT)
+        input_schema['properties']['data']=copy.deepcopy(self.manifest.get('input_schema',{}))
+        output_schema['properties']['data']=copy.deepcopy(self.manifest.get('output_schema',{}))
+        example=self.manifest.get('example',{'request_id':'example-001','data':{}})
+        if not valid_example(example,self.manifest.get('input_schema',{})):example=None
         self.metadata={'type':record['type'],'name':self.manifest['name'],'description':self.manifest['description'],
-            'input_schema':SCHEMA,'output_schema':OUTPUT,'settings_schema':self.manifest['settings_schema'],
-            'example':self.manifest.get('example',{'request_id':'example-001','data':{}}),
+            'input_schema':input_schema,'output_schema':output_schema,'settings_schema':copy.deepcopy(self.manifest['settings_schema']),
+            'example':copy.deepcopy(example),
             'source':record['repository_id'],'version':self.manifest['version'],'commit':record['commit'],'dynamic':True}
     def validate(self,value):
         if not isinstance(value,dict) or not Draft202012Validator(self.manifest['settings_schema']).is_valid(value):raise Invalid('Settings do not match the action schema.')
@@ -100,15 +143,34 @@ class GitPlugin:
     def validate_input(self,value):
         if not Draft202012Validator(SCHEMA).is_valid(value) or not Draft202012Validator(self.manifest.get('input_schema',{})).is_valid(value.get('data')):raise Invalid('Input does not match the action schema.')
 
+def system_repository(url):
+    return url.rstrip('/').lower().removesuffix('.git')==DEFAULT_REPOSITORY_URL.lower().removesuffix('.git')
+
 class Repositories:
     def __init__(self,root):
         self.store=Store(Path(root)/'repositories');self.state=self.store.read('catalog.json',{'repositories':[]})
         self.lock=asyncio.Lock();self.tasks={};self.active_snapshots=set()
         for repo in self.state['repositories']:
             if repo['status']=='Syncing':repo.update(status='Failed',logs=['Repository sync interrupted. Refresh to retry.'])
+    def start(self):
+        # Bootstrap only metadata. Never create instances or execute repository code.
+        repo=next((r for r in self.state['repositories'] if system_repository(r['url'])),None)
+        if repo is None:
+            repo={'id':uuid.uuid4().hex[:16],'url':DEFAULT_REPOSITORY_URL,'ref':DEFAULT_REPOSITORY_REF,
+                  'status':'Not synced','actions':[],'logs':[]}
+            candidate=copy.deepcopy(self.state);candidate['repositories'].append(repo)
+            self.store.write('catalog.json',candidate);self.state=candidate
+        if repo['status'] in ('Not synced','Failed'):self.refresh(repo['id'])
     def public(self):
         value=copy.deepcopy(self.state)
+        registry=Store(self.store.root.parent).read('agents.json',{})
+        used={d['plugin']['repository_id'] for d in registry.get('agents',[]) if d.get('plugin')}
         for repo in value['repositories']:
+            repo['system']=system_repository(repo['url'])
+            repo['in_use']=repo['id'] in used
+            repo['refreshing']=repo['id'] in self.tasks and not self.tasks[repo['id']].done()
+            repo['delete_reason']='System repositories cannot be deleted.' if repo['system'] else 'Repository is used by existing actions, including inactive actions.' if repo['in_use'] else 'Wait for repository refresh to finish.' if repo['refreshing'] else None
+            repo['can_delete']=repo['delete_reason'] is None
             if repo['status']=='Syncing' and (repo['id'] not in self.tasks or self.tasks[repo['id']].done()):repo.update(status='Failed',logs=['Sync stopped. Refresh to retry.'])
         return value
     def types(self):
@@ -127,6 +189,19 @@ class Repositories:
             repo={'id':uuid.uuid4().hex[:16],'url':url,'ref':ref,'status':'Not synced','actions':[],'logs':[]}
             candidate=copy.deepcopy(self.state);candidate['repositories'].append(repo);self.store.write('catalog.json',candidate);self.state=candidate
         self.refresh(repo['id']);return self.public()
+    async def delete(self,value):
+        if not isinstance(value,dict) or set(value)!={'id','confirmed'} or not isinstance(value['id'],str) or value['confirmed'] is not True:
+            raise Invalid('Confirm repository deletion.')
+        async with self.lock:
+            repo=next((r for r in self.public()['repositories'] if r['id']==value['id']),None)
+            if repo is None:raise Invalid('Repository not found.')
+            if not repo['can_delete']:raise Invalid(repo['delete_reason'])
+            candidate=copy.deepcopy(self.state)
+            candidate['repositories']=[r for r in candidate['repositories'] if r['id']!=value['id']]
+            self.store.write('catalog.json',candidate);self.state=candidate
+            self.tasks.pop(value['id'],None)
+        await self.prune_sources()
+        return self.public()
     def refresh(self,id):
         if id in self.tasks and not self.tasks[id].done():raise Invalid('Repository refresh is already running.')
         if not any(r['id']==id for r in self.state['repositories']):raise Invalid('Repository not found.')
@@ -226,9 +301,9 @@ class Environment:
                 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*==[A-Za-z0-9][A-Za-z0-9.!+_-]*(?:\s+--hash=sha256:[a-f0-9]{64})+',line):raise Invalid('Use exact registry versions with SHA256 hashes in requirements.lock.')
             self.set('Installing','Installing locked dependencies. Repository code is trusted.')
             await process([sys.executable,'-m','venv',path],timeout=120)
-            await process([path/'bin/python','-m','pip','install','--isolated','--disable-pip-version-check','--no-input','--require-hashes','--only-binary=:all:','-r',source/'requirements.lock'],cwd=source,timeout=300)
+            await process([path/'bin/python','-m','pip','install','--isolated','--disable-pip-version-check','--no-input','--require-hashes','--only-binary=:all:','-r',source/'requirements.lock'],cwd=source,timeout=300,venv=path)
             self.set('Verifying','Checking action entrypoint and runner protocol.')
-            response=await process([path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,payload=b'{"mode":"check"}',capture=True,timeout=30)
+            response=await process([path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,payload=b'{"mode":"check"}',capture=True,timeout=30,venv=path)
             if json.loads(response)!={'ready':True}:raise Invalid('Invalid runner response.')
             self.set('Ready','Environment is ready.',python=sys.version,commit=self.plugin.record['commit'])
         except asyncio.CancelledError:
@@ -240,7 +315,7 @@ class Environment:
     async def execute(self,data,settings):
         self.require();source=self.path/'source'
         response=await process([self.path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,
-            payload=json.dumps({'mode':'execute','data':data,'settings':settings},allow_nan=False).encode(),capture=True,timeout=30)
+            payload=json.dumps({'mode':'execute','data':data,'settings':settings},allow_nan=False).encode(),capture=True,timeout=30,venv=self.path)
         try:
             value=json.loads(response,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
             if not isinstance(value,dict) or set(value)!={'data'} or not Draft202012Validator(self.plugin.manifest.get('output_schema',{})).is_valid(value['data']):raise ValueError()

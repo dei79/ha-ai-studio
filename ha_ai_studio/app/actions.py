@@ -314,7 +314,7 @@ class Studio:
         if not isinstance(value,dict) or set(value)!={'id','name','type'}:raise Invalid('Provide id, name and type.')
         if not isinstance(value['id'],str) or not re.fullmatch('[a-z][a-z0-9-]{0,47}',value['id']):raise Invalid('Action ID must use lowercase letters, digits and hyphens, up to 48 characters.')
         if not isinstance(value['name'],str) or not 1<=len(value['name'].strip())<=80 or any(ord(c)<32 for c in value['name']):raise Invalid('Name must contain 1 to 80 characters.')
-        if not isinstance(value['type'],str) or value['type'] not in {**TYPES,**self.repositories.types()}:raise Invalid('Select an installed action type.')
+        if not isinstance(value['type'],str) or value['type'] not in {p['type'] for p in CATALOG} | set(self.repositories.types()):raise Invalid('Select an action type from a configured Git repository.')
         async with self.lock:
             id=value['id']
             if id in self.services or any(c['id']==id for c in self.registry.get('deleted',[])):raise Invalid('Action ID is in use or reserved.')
@@ -327,6 +327,9 @@ class Studio:
             if self.running:service.task=asyncio.create_task(service.run())
             if service.environment:service.environment.start()
             return service.status()
+    async def delete_repository(self,value):
+        # Serialize source deletion with instance creation and its durable Git binding.
+        async with self.lock:return await self.repositories.delete(value)
     async def delete(self,value):
         if not isinstance(value,dict) or set(value)!={'id','confirmed'} or value['confirmed'] is not True:raise Invalid('Confirm action deletion.')
         async with self.brokers.lock:
@@ -338,6 +341,7 @@ class Studio:
                 await service.close()
                 return self.list()
     async def start(self):
+        self.repositories.start()
         await self.brokers.refresh();self.running=True
         self.discovery.task=asyncio.create_task(self.discovery.run())
         for service in self.services.values():service.task=asyncio.create_task(service.run())

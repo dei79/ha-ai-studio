@@ -1,6 +1,6 @@
 # Action plugins
 
-Each trusted action type owns a directory under `action_types/`, registered explicitly in `__init__.py`. Currently only `echo` is installed. Bundled types are explicitly registered; trusted Git types use the separate process contract below. No workflow graph is supported.
+New action types come from configured Git repositories. Echo is maintained in the separate `ha-ai-studio-actions-core` repository under `actions/echo/`. The `legacy_echo/` directory and `TYPES` registry are compatibility-only for previously saved instances; they are excluded from the creation catalog and creation API. Existing IDs, routes, jobs and discovery identities remain unchanged. No automatic migration is performed. No workflow graph is supported.
 
 A plugin provides:
 
@@ -15,6 +15,16 @@ Common infrastructure owns brokers, lifecycle, envelope validation, durable inte
 The UI test endpoint runs the submitted draft without connecting MQTT, writing production jobs or publishing results. Future plugins with side effects require an explicit safe preview design before they may be offered in this endpoint. Plugins are trusted code, not a sandbox. Adding a bundled type requires rebuilding and testing the app.
 
 ## Trusted Git action repositories
+
+The public `https://github.com/ha-ai-studio/ha-ai-studio-actions-core.git` source
+is added automatically at startup with ref `main`, including on existing installations.
+An existing entry for this repository keeps its ID and selected ref. Only missing
+or failed default catalogs are refreshed at startup; no action instance is created
+and no repository code is installed or executed. System sources are marked System
+and cannot be deleted. User sources can be deleted only when no existing action
+(including inactive or unconfigured instances) references them and no refresh is
+running. Deletion removes the local catalog; the remote Git repository is untouched.
+Historical files and snapshots referenced by deleted actions remain preserved.
 
 Settings → Action repositories accepts public HTTPS Git repositories and a branch,
 tag or commit. Refresh reads metadata only. Existing instances stay pinned to their
@@ -48,6 +58,11 @@ Example `action.json` (Python must match the app runtime, currently 3.12):
 
 `input_schema` and `output_schema` validate the JSON **data**, not the transport
 envelope. Schemas use JSON Schema Draft 2020-12; references are unsupported.
+If provided, `example` must be a valid request envelope matching the input schema
+and request size/ID rules. A default example is offered only when it validates;
+otherwise Test in Home Assistant is unavailable until a valid example is supplied.
+Installation checks that `execute` accepts the positional arguments `data, settings`
+without calling the function.
 The settings editor supports primitive properties and falls back to a JSON editor
 for complex schemas. Repository JavaScript is never served to the browser.
 
@@ -79,4 +94,4 @@ execution; execution and MQTT delivery retain their separate durable states.
 Repository code runs with the app's OS permissions and must be trusted. A separate
 process and filtered environment do not provide a security sandbox. Git Actions have
 no draft preview until a safe preview contract is implemented. Use isolated brokers
-and synthetic data for integration testing. Built-in Echo remains unchanged.
+and synthetic data for integration testing. Existing bundled Echo instances retain their compatibility runtime. New Echo instances use the Git runner.

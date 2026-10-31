@@ -18,6 +18,8 @@ def main():
         spec=importlib.util.spec_from_file_location('studio_action',entry)
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         if not callable(getattr(module,'execute',None)):raise ValueError('Missing execute')
+        # Bind the exact positional call without executing action code.
+        inspect.signature(module.execute).bind(None,{})
         if request['mode']=='check':response={'ready':True}
         else:
             result=module.execute(request['data'],request['settings'])

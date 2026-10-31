@@ -54,6 +54,8 @@ def create_app(root=None, dev=None):
         if action == 'repositories':
             if request.method=='GET':return web.json_response(studio.repositories.public())
             if request.method=='POST':return web.json_response(await studio.repositories.save(await request.json()))
+        if action == 'repository-delete' and request.method=='POST':
+            return web.json_response(await studio.delete_repository(await request.json()))
         if action == 'repository-refresh' and request.method=='POST':
             value=await request.json()
             if not isinstance(value,dict) or set(value)!={'id'} or not isinstance(value['id'],str):raise Invalid('Provide repository ID.')

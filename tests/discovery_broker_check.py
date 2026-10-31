@@ -1,4 +1,5 @@
 """Isolated real MQTT A/B/C checks; not a Home Assistant installation test."""
+from unittest.mock import patch
 import asyncio
 import copy
 import json
@@ -148,4 +149,7 @@ time.sleep(60)
     for client in clients:client.disconnect();await asyncio.to_thread(client.loop_stop)
     print('PASS: real isolated A/B/C; central discovery; stable IDs; HA birth; TCP reconnect; restart; clean offline and hard-kill LWT; rename/deactivate/delete; broker switch/off; UI test isolation; private payload exclusion; no retained results; foreign topics preserved.')
 
-asyncio.run(main())
+from app.action_types import TYPES
+# Exercise historical instances without exposing the compatibility type in production.
+with patch("app.actions.CATALOG",[TYPES["echo"].metadata]), patch("app.plugins.Repositories.start"):
+    asyncio.run(main())

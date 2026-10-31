@@ -98,4 +98,7 @@ async def main():
     for client in clients:client.disconnect();await asyncio.to_thread(client.loop_stop)
     print('PASS: Git action venv + async runner across brokers, restart, deduplication/conflict and retained rejection; Echo across brokers A/B; all JSON types; duplicate/conflict; invalid JSON; retained rejection; restart; delivery failure/retry; draft test isolation; deactivate/reactivate/delete; no internal workflow topics or retained results.')
 
-asyncio.run(main())
+from app.action_types import TYPES
+# Exercise historical instances without exposing the compatibility type in production.
+with patch("app.actions.CATALOG",[TYPES["echo"].metadata]), patch("app.plugins.Repositories.start"):
+    asyncio.run(main())

@@ -1,15 +1,18 @@
 # HA AI Studio — configured Actions
 
-Home Assistant controls triggers, schedules, conditions and follow-up actions. Studio runs one configured Action per request. Echo is currently the only Action type; there is no AI model or workflow builder in this release.
+Home Assistant controls triggers, schedules, conditions and follow-up actions. Studio runs one configured Action per request. Echo is supplied by the separate `ha-ai-studio-actions-core` Git repository. Existing bundled Echo instances keep their compatibility runtime and saved state. There is no AI model or workflow builder in this release.
 
 ## Setup
 
 1. Open **Settings** and add a broker. A Home Assistant broker appears as default only when Supervisor discovery succeeds. Local development can use these manual brokers or an optional `.env` broker.
-2. Choose **Create action**, enter a name and select **Echo**.
-3. In **Input**, choose a broker and concrete request topic. In **Output**, keep **Same as input** or select another broker and set a different result topic.
-4. In **General**, set the name and **Active** checkbox. **Save** persists both settings and activation state together. Clearing Active and saving closes the subscription and discards queued messages.
-5. Open **Message schemas** for the input and output contracts. Use **Test in Home Assistant** for a copyable MQTT test automation.
-6. Send requests from Home Assistant; open **Live activity** from the Actions table to follow incoming requests, processing and outgoing responses.
+2. In **Settings → Action repositories**, add the public HTTPS Git clone URL for `ha-ai-studio-actions-core` and a branch, tag or commit. Wait for the repository status to become **Ready**.
+3. Choose **Create action**, enter a name and select **Echo**. Wait for its Python environment to become **Ready** before activation. Echo needs no third-party dependencies.
+4. In **Input**, choose a broker and concrete request topic. In **Output**, keep **Same as input** or select another broker and set a different result topic.
+5. In **General**, set the name and **Active** checkbox. **Save** persists both settings and activation state together. Clearing Active and saving closes the subscription and discards queued messages.
+6. Open **Message schemas** for the input and output contracts. Use **Test in Home Assistant** for a copyable MQTT test automation.
+7. Send requests from Home Assistant; open **Live activity** from the Actions table to follow incoming requests, processing and outgoing responses.
+
+Repository refresh changes the catalog for new instances only; existing instances stay pinned to their original commit. Local sources and private Git credentials are unsupported. Git action draft preview is unavailable. Only install trusted repositories: a venv isolates dependencies, not filesystem or network access.
 
 Connections require MQTT v5. The subscriber uses Retain As Published so both live retained requests and retained replay are ignored. The broker connection test checks connection/authentication without publishing; it does not prove all topic ACLs. Active Actions need subscribe permission on their request topic and publish permission for results and diagnostics. The app keeps existing diagnostic discovery IDs on the input broker.
 

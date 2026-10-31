@@ -16,7 +16,7 @@ Optional **Settings → edit broker → Enable MQTT Discovery** announces Studio
 
 ## Install
 
-After the first successful container release, add `https://github.com/dei79/ha-ai-studio` under **Settings → Apps → Install app → ⋮ → Repositories**, then install **HA AI Studio** and open its web UI through Ingress. This requires Home Assistant with Supervisor on amd64. The repository and GHCR package must be public for installation without registry credentials. The app is marked experimental; currently only Echo is available.
+After the first successful container release, add `https://github.com/dei79/ha-ai-studio` under **Settings → Apps → Install app → ⋮ → Repositories**, then install **HA AI Studio** and open its web UI through Ingress. This requires Home Assistant with Supervisor on amd64. The repository and GHCR package must be public for installation without registry credentials. The app is marked experimental. Action types are installed from Git repositories in Settings. Echo is maintained in the separate `ha-ai-studio-actions-core` repository; existing bundled Echo instances remain supported without automatic migration.
 
 Home Assistant pulls `ghcr.io/dei79/ha-ai-studio:<version>` using the version in `ha_ai_studio/config.yaml`; it does not build the image on the device. Before the first successful tag workflow, that image does not exist. Repository metadata can become visible before a tag build finishes, so announce an update only after publication succeeds.
 
@@ -30,6 +30,7 @@ See [the guide and HA automation examples](ha_ai_studio/DOCS.md), [plugin contra
 
 ```sh
 ./scripts/test.sh
+./scripts/test-ui.sh  # Frontend regressions; requires Node.js 22.7+, no npm dependencies
 ./scripts/test-mqtt.sh
 ./scripts/test-mqtt-security.sh
 python3 -m unittest discover -s tests -p test_package.py -v

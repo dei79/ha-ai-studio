@@ -21,6 +21,9 @@ class PackageTests(unittest.TestCase):
             archive=packager.build(root);first=archive.read_bytes()
             with tarfile.open(archive) as tar:
                 self.assertNotIn('ha_ai_studio/.env',tar.getnames())
+                self.assertIn('ha_ai_studio/app/action_types/legacy_echo/editor.js',tar.getnames())
+                self.assertIn('ha_ai_studio/app/static/schema-editor.js',tar.getnames())
+                self.assertNotIn('ha_ai_studio/app/action_types/echo/editor.js',tar.getnames())
                 self.assertEqual(tar.extractfile('ha_ai_studio/LICENSE').read(),(ROOT/'LICENSE').read_bytes())
                 for item in tar:
                     self.assertEqual((item.uid,item.gid,item.uname,item.gname,item.mtime,item.mode),(0,0,'','',0,0o644))

@@ -1,5 +1,6 @@
 // JSON quoted strings are valid YAML scalars and Jinja string literals.
 export function mqttTestAutomationYaml(config, example) {
+ if(!example||typeof example!=='object'||Array.isArray(example)||!Object.hasOwn(example,'data'))throw Error('No valid example request is available for this action.');
  const payload={...example};delete payload.request_id;
  return `alias: ${JSON.stringify('HA AI Studio - Test '+config.name)}
 description: Send a test request and show incoming results.

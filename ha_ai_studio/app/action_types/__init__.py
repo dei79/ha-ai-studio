@@ -1,4 +1,5 @@
-"""Explicit registry of trusted, bundled action plugins."""
-from . import echo
-TYPES = {'echo': echo}
-CATALOG = [plugin.metadata for plugin in TYPES.values()]
+"""Compatibility registry for persisted bundled types; new types come from Git."""
+from . import legacy_echo
+
+TYPES = {'echo': legacy_echo}
+CATALOG = []

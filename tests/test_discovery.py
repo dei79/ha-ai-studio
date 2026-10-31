@@ -11,6 +11,9 @@ from test_actions import broker
 
 class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # Historical instances: temporarily expose the old type only in this fixture.
+        from app.action_types import TYPES
+        legacy_catalog=patch("app.actions.CATALOG",[TYPES["echo"].metadata]);legacy_catalog.start();self.addCleanup(legacy_catalog.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.studio = Studio(self.tmp.name)
         self.broker = (await self.studio.brokers.save(broker()))['brokers'][0]['id']
