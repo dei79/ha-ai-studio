@@ -1,7 +1,11 @@
-## Unreleased
+## 0.0.5
 
+- Migrate the frontend to React, TypeScript and an SCSS design system, with regression tests and type checks in the container build.
+- Run unit/API/package, isolated MQTT, TLS/topic-permission and security checks in parallel on the built image; publish only after all checks succeed.
 - Isolate Git schema checks in cancellable worker processes with CPU, memory, concurrency and wall-time limits so expensive schemas cannot block the Studio server.
 - Add HTTP liveness, validation recovery and worker cleanup regression coverage.
+
+The app remains experimental and amd64-only. Live Home Assistant authentication and production TLS require separate validation.
 
 ## 0.0.4
 
