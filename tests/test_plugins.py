@@ -24,7 +24,7 @@ class GitActions(unittest.IsolatedAsyncioTestCase):
     async def seed(self):
         import shutil
         dest=self.studio.repositories.store.root/'sources'/'snapshot'/'actions'/'sample';dest.parent.mkdir(parents=True);shutil.copytree(self.fixture,dest)
-        record={'type':'git-test-sample','repository_id':'test','commit':'a'*40,'snapshot':'snapshot','directory':'actions/sample','manifest':manifest(dest)}
+        record={'type':'git-test-sample','repository_id':'test','commit':'a'*40,'snapshot':'snapshot','directory':'actions/sample','manifest':await manifest(dest)}
         state={'repositories':[{'id':'test','url':'https://example.invalid/actions.git','ref':'main','status':'Ready','actions':[record],'logs':[]}]}
         self.studio.repositories.store.write('catalog.json',state);self.studio.repositories.state=state
         await self.studio.create({'id':'sample','name':'Sample instance','type':record['type']})
@@ -166,24 +166,24 @@ def execute(data, settings):
     async def test_request_examples_are_validated_or_unavailable(self):
         from app.plugins import GitPlugin,valid_example
         data={**self.data,'input_schema':{'type':'integer'}}
-        (self.fixture/'action.json').write_text(json.dumps(data));accepted=manifest(self.fixture)
+        (self.fixture/'action.json').write_text(json.dumps(data));accepted=await manifest(self.fixture)
         record={'type':'review','repository_id':'test','commit':'a'*40,'manifest':accepted}
         self.assertIsNone(GitPlugin(record,self.fixture).metadata['example'])
         for example in [None,{}, {'request_id':'one','data':{}},{'request_id':' ','data':42},{'request_id':'\n','data':42},{'request_id':'one','data':42,'extra':True}]:
             (self.fixture/'action.json').write_text(json.dumps({**data,'example':example}))
-            with self.assertRaisesRegex(Invalid,'Example must be a valid request'):manifest(self.fixture)
+            with self.assertRaisesRegex(Invalid,'Example must be a valid request'):await manifest(self.fixture)
         example={'request_id':'one','data':0}
-        (self.fixture/'action.json').write_text(json.dumps({**data,'example':example}));record['manifest']=manifest(self.fixture)
+        (self.fixture/'action.json').write_text(json.dumps({**data,'example':example}));record['manifest']=await manifest(self.fixture)
         self.assertEqual(GitPlugin(record,self.fixture).metadata['example'],example)
-        for value in [None,False,0,'text',[],{}]:self.assertTrue(valid_example({'request_id':'one','data':value},{}))
-        for value in ['x'*17000,float('nan'),'\ud800']:self.assertFalse(valid_example({'request_id':'one','data':value},{}))
+        for value in [None,False,0,'text',[],{}]:self.assertTrue(await valid_example({'request_id':'one','data':value},{}))
+        for value in ['x'*17000,float('nan'),'\ud800']:self.assertFalse(await valid_example({'request_id':'one','data':value},{}))
         record['manifest']={**data,'example':{'request_id':'one','data':{}}}
-        self.assertIsNone(GitPlugin(record,self.fixture).metadata['example'])
+        self.assertFalse(await valid_example(record['manifest']['example'],data['input_schema']))
 
     async def test_manifest_rejects_external_references_and_path_escape(self):
         for change in [{'entrypoint':'../action.py'},{'settings_schema':{'type':'object','$ref':'https://example.invalid/schema'}},{'python':'0.0'},{'id':'../../x'}]:
             (self.fixture/'action.json').write_text(json.dumps({**self.data,**change}))
-            with self.assertRaises(Invalid):manifest(self.fixture)
+            with self.assertRaises(Invalid):await manifest(self.fixture)
     async def test_sources_validate_and_refresh_failures_preserve_catalog(self):
         for url in ['file:///tmp/repo','http://example.com/repo','https://user:secret@example.com/repo','ssh://example.com/repo']:
             with self.assertRaises(Invalid):await self.studio.repositories.save({'url':url,'ref':'main'})

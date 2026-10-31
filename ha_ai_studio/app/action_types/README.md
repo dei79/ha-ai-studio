@@ -95,3 +95,5 @@ Repository code runs with the app's OS permissions and must be trusted. A separa
 process and filtered environment do not provide a security sandbox. Git Actions have
 no draft preview until a safe preview contract is implemented. Use isolated brokers
 and synthetic data for integration testing. Existing bundled Echo instances retain their compatibility runtime. New Echo instances use the Git runner.
+
+Git schema validation runs in separate one-shot processes (including manifest and example checks). Each worker has a 1-second CPU limit, 256 MiB address-space growth limit above the initial interpreter mappings, and a 3-second wall deadline including queueing. At most two validators run concurrently. Limits fail closed with a sanitized error; cancellation kills and reaps the process group. Catalog rendering reuses examples validated during import and never evaluates schemas. These limits are resource isolation, not a sandbox for untrusted repositories.

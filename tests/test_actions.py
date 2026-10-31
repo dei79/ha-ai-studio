@@ -126,9 +126,9 @@ class Actions(unittest.IsolatedAsyncioTestCase):
         for payload,id,code in [('{',None,'invalid_request'),('{}',None,'invalid_request_id'),('{"request_id":""}',None,'invalid_request_id'),('{"request_id":"x"}','x','invalid_request'),('{"request_id":"x","data":NaN}',None,'invalid_request'),('{"request_id":"x","data":1e999}','x','invalid_request'),('{"request_id":"x","data":1,"extra":2}','x','invalid_request')]:
             result=await self.s.test(self.conf,payload);self.assertEqual(result['result']['request_id'],id);self.assertEqual(result['result']['error']['code'],code)
         for id in [' '*4,'x'*129,'x\n']:
-            _,error=parse(json.dumps({'request_id':id,'data':None}),TYPES['echo']);self.assertEqual(error['request_id'],None)
-        _,error=parse(json.dumps({'request_id':'x','data':'a'*MAX_BYTES}),TYPES['echo']);self.assertEqual(error['error']['code'],'message_too_large');self.assertEqual(error['request_id'],'x')
-        self.assertIsNotNone(parse('{"request_id":"x","data":1,"data":2}',TYPES['echo'])[1])
+            _,error=await parse(json.dumps({'request_id':id,'data':None}),TYPES['echo']);self.assertEqual(error['request_id'],None)
+        _,error=await parse(json.dumps({'request_id':'x','data':'a'*MAX_BYTES}),TYPES['echo']);self.assertEqual(error['error']['code'],'message_too_large');self.assertEqual(error['request_id'],'x')
+        self.assertIsNotNone((await parse('{"request_id":"x","data":1,"data":2}',TYPES['echo']))[1])
     async def test_draft_test_never_connects_or_changes_production(self):
         before=copy.deepcopy(self.s.config)
         with patch('app.actions.MQTT') as mqtt:

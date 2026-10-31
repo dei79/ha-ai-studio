@@ -12,7 +12,7 @@ from .store import Store
 from .brokers import Brokers, topic_check
 from .mqtt import MQTT, run_transport
 from .action_types import TYPES, CATALOG
-from .plugins import Repositories, Environment
+from .plugins import Repositories, Environment, GitPlugin
 
 MAX_BYTES=16384
 MAX_JOBS=256
@@ -30,7 +30,7 @@ def no_duplicates(pairs):
         result[key]=value
     return result
 
-def parse(payload,plugin):
+async def parse(payload,plugin):
     request_id=None
     try:
         body=json.loads(payload,object_pairs_hook=no_duplicates,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
@@ -38,7 +38,8 @@ def parse(payload,plugin):
         if len(payload.encode() if isinstance(payload,str) else payload)>MAX_BYTES:
             return None,error_result(request_id,'message_too_large','Request exceeds 16384 bytes.')
         if request_id is None:return None,error_result(None,'invalid_request_id','request_id must be a non-empty string of up to 128 characters without control characters.')
-        plugin.validate_input(body)
+        if isinstance(plugin,GitPlugin):await plugin.validate_input(body)
+        else:plugin.validate_input(body)
         # Reject overflow to infinity, invalid surrogates and non-finite numbers.
         json.dumps(body,allow_nan=False,ensure_ascii=False).encode('utf-8')
         return body,None
@@ -100,7 +101,7 @@ class ActionService:
     def ensure_idle(self):
         if self.deleted:raise Invalid('Action has been deleted.')
         if self.busy:raise Invalid('Action is busy. Try again after the current operation.')
-    def check_config(self,value):
+    async def check_config(self,value):
         if not self.supported:raise Invalid('Unsupported legacy action. Its original files are preserved; create a new Echo action.')
         if not isinstance(value,dict) or set(value)!={'name','input','settings','output'}:raise Invalid('Provide name, input, settings and output.')
         if not isinstance(value['name'],str) or not 1<=len(value['name'].strip())<=80 or any(ord(c)<32 for c in value['name']):raise Invalid('Name must contain 1 to 80 characters.')
@@ -109,7 +110,8 @@ class ActionService:
             if not isinstance(part,dict) or set(part)!={'broker_id','topic'}:raise Invalid('Provide broker and topic for input and output.')
             if part['broker_id'] is not None and (not isinstance(part['broker_id'],str) or len(part['broker_id'])>80):raise Invalid('Invalid broker selection.')
             topic_check(part['topic'])
-        self.plugin.validate(value['settings'])
+        if self.environment:await self.plugin.validate(value['settings'])
+        else:self.plugin.validate(value['settings'])
         result=copy.deepcopy(value);result['name']=result['name'].strip();return result
     def routes(self,config=None):
         value=config or (self.config or {}).get('active')
@@ -142,7 +144,8 @@ class ActionService:
         if type(activate) is not bool:raise Invalid('Active must be true or false.')
         if set_enabled is not None and (type(set_enabled) is not bool or set_enabled!=activate):raise Invalid('Invalid Active state.')
         async with self.brokers.lock:
-            self.ensure_idle();value=self.check_config(value)
+            self.ensure_idle();value=await self.check_config(value)
+            self.ensure_idle()
             if activate:
                 if self.environment:self.environment.require()
                 self.check_routes(value)
@@ -162,7 +165,7 @@ class ActionService:
         return self.status()
     async def test(self,config,payload):
         if self.environment:raise Invalid('Draft preview is unavailable for Git actions. Use an isolated MQTT test instance.')
-        config=self.check_config(config);body,error=parse(payload,self.plugin)
+        config=await self.check_config(config);body,error=await parse(payload,self.plugin)
         if error:return {'mode':'test','delivery':'not_sent','result':error}
         try:
             data=await self.execute(body['data'],config['settings'])
@@ -174,7 +177,7 @@ class ActionService:
         return await asyncio.wait_for(self.plugin.execute(data,settings),30)
     async def request(self,payload):
         # The caller owns lock throughout execution and delivery.
-        body,error=parse(payload,self.plugin)
+        body,error=await parse(payload,self.plugin)
         if error:
             self.trace('error',error['error']['message']);return error,self.config['active']
         id=body['request_id'];hashed=digest(body);cached=self.jobs.get(id)

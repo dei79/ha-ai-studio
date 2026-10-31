@@ -15,13 +15,16 @@ import signal
 import sys
 from urllib.parse import urlsplit
 import uuid
-from jsonschema import Draft202012Validator
+import weakref
 from .domain import Invalid, stamp
 from .store import Store
 
 DEFAULT_REPOSITORY_URL = 'https://github.com/ha-ai-studio/ha-ai-studio-actions-core.git'
 DEFAULT_REPOSITORY_REF = 'main'
 RUNNER = Path(__file__).with_name('plugin_runner.py')
+SCHEMA_WORKER = Path(__file__).with_name('schema_worker.py')
+SCHEMA_TIMEOUT = 3
+_SCHEMA_SLOTS = weakref.WeakKeyDictionary()
 SCHEMA = {'type':'object','required':['request_id','data'],'additionalProperties':False,
           'properties':{'request_id':{'type':'string','minLength':1,'maxLength':128},'data':{}}}
 OUTPUT = {'type':'object','required':['request_id','status','data'],'additionalProperties':False,
@@ -81,13 +84,31 @@ async def process(args, *, cwd=None, payload=None, timeout=120, capture=False, v
     return b''.join(protocol.chunks)
 
 
-def valid_example(value,data_schema):
+async def schema_valid(schema, value=None, *, check=False):
+    """Bound both queueing and execution; cancellation reaps the worker group."""
     try:
-        if not Draft202012Validator(SCHEMA).is_valid(value):return False
+        payload=json.dumps({'mode':'schema' if check else 'value','schema':schema,'value':value},allow_nan=False).encode()
+        if len(payload)>200000:raise Invalid('Schema validation input exceeds 200000 bytes.')
+        loop=asyncio.get_running_loop()
+        slots=_SCHEMA_SLOTS.setdefault(loop,asyncio.Semaphore(2))
+        async with asyncio.timeout(SCHEMA_TIMEOUT):
+            async with slots:
+                response=await process([sys.executable,'-I',SCHEMA_WORKER],payload=payload,capture=True,timeout=SCHEMA_TIMEOUT)
+        if response not in (b'true',b'false'):raise ValueError()
+        return response==b'true'
+    except asyncio.CancelledError:raise
+    except Exception:
+        raise Invalid('Schema validation failed or exceeded its resource limits.') from None
+
+
+async def valid_example(value,data_schema):
+    try:
+        if not isinstance(value,dict) or set(value)!={'request_id','data'}:return False
         ident=value['request_id']
-        if not ident.strip() or any(ord(c)<32 for c in ident):return False
+        if not isinstance(ident,str) or not 1<=len(ident)<=128 or not ident.strip() or any(ord(c)<32 for c in ident):return False
         encoded=json.dumps(value,allow_nan=False,ensure_ascii=False).encode('utf-8')
-        return len(encoded)<=16384 and Draft202012Validator(data_schema).is_valid(value['data'])
+        return len(encoded)<=16384 and await schema_valid(data_schema,value['data'])
+    except Invalid:raise
     except (ValueError,TypeError,UnicodeError,RecursionError):return False
 
 
@@ -99,7 +120,7 @@ def local_file(root, relative):
     return path
 
 
-def manifest(root):
+async def manifest(root):
     path=local_file(root,'action.json')
     if path.stat().st_size>32768:raise Invalid('Action manifest is too large.')
     try:
@@ -117,10 +138,13 @@ def manifest(root):
             schema=value.get(key,{})
             # External references could cause server-side network/file access.
             if '"$ref"' in json.dumps(schema) or '"$dynamicRef"' in json.dumps(schema):raise ValueError()
-            Draft202012Validator.check_schema(schema)
+            if not await schema_valid(schema,check=True):raise ValueError()
         if value['settings_schema'].get('type')!='object':raise ValueError()
-        if 'example' in value and not valid_example(value['example'],value.get('input_schema',{})):
+        if 'example' in value and not await valid_example(value['example'],value.get('input_schema',{})):
             raise Invalid('Example must be a valid request matching the input schema.')
+        if 'example' not in value:
+            example={'request_id':'example-001','data':{}}
+            if await valid_example(example,value.get('input_schema',{})):value['example']=example
         return value
     except Invalid:raise
     except Exception:raise Invalid('Invalid action manifest.') from None
@@ -131,17 +155,22 @@ class GitPlugin:
         input_schema=copy.deepcopy(SCHEMA);output_schema=copy.deepcopy(OUTPUT)
         input_schema['properties']['data']=copy.deepcopy(self.manifest.get('input_schema',{}))
         output_schema['properties']['data']=copy.deepcopy(self.manifest.get('output_schema',{}))
-        example=self.manifest.get('example',{'request_id':'example-001','data':{}})
-        if not valid_example(example,self.manifest.get('input_schema',{})):example=None
+        # Explicit examples were validated at import. Never execute schemas while
+        # constructing saved instances or rendering the catalog.
+        example=self.manifest.get('example')
+        if 'example' not in self.manifest and self.manifest.get('input_schema',{})=={}:
+            example={'request_id':'example-001','data':{}}
         self.metadata={'type':record['type'],'name':self.manifest['name'],'description':self.manifest['description'],
             'input_schema':input_schema,'output_schema':output_schema,'settings_schema':copy.deepcopy(self.manifest['settings_schema']),
             'example':copy.deepcopy(example),
             'source':record['repository_id'],'version':self.manifest['version'],'commit':record['commit'],'dynamic':True}
-    def validate(self,value):
-        if not isinstance(value,dict) or not Draft202012Validator(self.manifest['settings_schema']).is_valid(value):raise Invalid('Settings do not match the action schema.')
+    async def validate(self,value):
         if len(json.dumps(value,allow_nan=False).encode())>100000:raise Invalid('Action settings exceed 100000 bytes.')
-    def validate_input(self,value):
-        if not Draft202012Validator(SCHEMA).is_valid(value) or not Draft202012Validator(self.manifest.get('input_schema',{})).is_valid(value.get('data')):raise Invalid('Input does not match the action schema.')
+        if not isinstance(value,dict) or not await schema_valid(self.manifest['settings_schema'],value):raise Invalid('Settings do not match the action schema.')
+    async def validate_input(self,value):
+        schema=copy.deepcopy(SCHEMA)
+        schema['properties']['data']=self.manifest.get('input_schema',{})
+        if not await schema_valid(schema,value):raise Invalid('Input does not match the action schema.')
 
 def system_repository(url):
     return url.rstrip('/').lower().removesuffix('.git')==DEFAULT_REPOSITORY_URL.lower().removesuffix('.git')
@@ -235,7 +264,7 @@ class Repositories:
             for directory in sorted(base.iterdir()):
                 if directory.is_symlink():raise Invalid('Symlink action directories are unsupported.')
                 if not directory.is_dir():continue
-                data=manifest(directory)
+                data=await manifest(directory)
                 if any(a['manifest']['id']==data['id'] for a in actions):raise Invalid('Duplicate action ID in repository.')
                 actions.append({'type':f"git-{id}-{data['id']}",'repository_id':id,'commit':commit,'snapshot':snapshot,'directory':str(directory.relative_to(target)),'manifest':data})
             if not actions or len(actions)>64:raise Invalid('Repository must contain 1 to 64 actions.')
@@ -318,7 +347,7 @@ class Environment:
             payload=json.dumps({'mode':'execute','data':data,'settings':settings},allow_nan=False).encode(),capture=True,timeout=30,venv=self.path)
         try:
             value=json.loads(response,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
-            if not isinstance(value,dict) or set(value)!={'data'} or not Draft202012Validator(self.plugin.manifest.get('output_schema',{})).is_valid(value['data']):raise ValueError()
+            if not isinstance(value,dict) or set(value)!={'data'} or not await schema_valid(self.plugin.manifest.get('output_schema',{}),value['data']):raise ValueError()
             json.dumps(value,allow_nan=False,ensure_ascii=False).encode('utf-8')
             return value['data']
         except Exception:raise Invalid('Action returned an invalid JSON result.') from None

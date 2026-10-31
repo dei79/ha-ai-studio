@@ -1,3 +1,8 @@
+## Unreleased
+
+- Isolate Git schema checks in cancellable worker processes with CPU, memory, concurrency and wall-time limits so expensive schemas cannot block the Studio server.
+- Add HTTP liveness, validation recovery and worker cleanup regression coverage.
+
 ## 0.0.4
 
 - Update the release workflow repository guard to the ha-ai-studio organization so release jobs run after the repository transfer.

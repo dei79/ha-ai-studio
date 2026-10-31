@@ -75,7 +75,7 @@ async def main():
         (dest/'action.py').write_text('async def execute(data, settings):\n return data\n')
         (dest/'requirements.lock').write_text('')
         (dest/'action.json').write_text(json.dumps({'id':'sample','name':'Synthetic','description':'Isolated MQTT fixture','version':'1','python':f'{sys.version_info.major}.{sys.version_info.minor}','entrypoint':'action.py','settings_schema':{'type':'object'}}))
-        record={'type':'git-test-sample','repository_id':'test','commit':'a'*40,'snapshot':'synthetic','directory':'actions/sample','manifest':manifest(dest)}
+        record={'type':'git-test-sample','repository_id':'test','commit':'a'*40,'snapshot':'synthetic','directory':'actions/sample','manifest':await manifest(dest)}
         catalog={'repositories':[{'id':'test','url':'https://example.invalid/test.git','ref':'main','status':'Ready','actions':[record],'logs':[]}]}
         studio.repositories.state=catalog;studio.repositories.store.write('catalog.json',catalog)
         await studio.create({'id':'dynamic','name':'Dynamic','type':record['type']});dynamic=studio.get('dynamic');await dynamic.environment.task
