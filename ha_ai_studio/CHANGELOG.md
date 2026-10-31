@@ -1,3 +1,10 @@
+## 0.0.8
+
+- Upgrade checkout, artifact upload/download and cache Actions to releases that run natively on Node.js 24 in both CI workflows.
+- Pin all four Actions to verified immutable commit hashes and annotate their release versions.
+
+The app remains experimental and amd64-only. Live Home Assistant authentication and production TLS require separate validation.
+
 ## 0.0.7
 
 - Cache the Grype vulnerability database between CI runs while keeping automatic updates and database age and integrity validation enabled.
