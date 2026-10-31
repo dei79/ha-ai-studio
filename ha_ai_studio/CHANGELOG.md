@@ -1,3 +1,8 @@
+## 0.0.13
+
+- Fix a timing-dependent MQTT integration test failure after Action restart by waiting for the background subscription instead of opening a competing connection.
+- Add regression coverage ensuring restart establishes only one input connection, including delayed connection setup.
+
 ## 0.0.12
 
 - Keep release-source integration tests in the container test suite instead of the pre-build release-tooling checks.
