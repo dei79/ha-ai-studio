@@ -1,3 +1,12 @@
+## 0.0.7
+
+- Cache the Grype vulnerability database between CI runs while keeping automatic updates and database age and integrity validation enabled.
+- Scan the downloaded build image archive directly instead of exporting the image again.
+- Show secret scanning, Python dependency auditing, database updates and image scanning as separate Security checks steps.
+- Preserve the local security-check entry point and add regression tests for archive reuse, missing archives and failure propagation.
+
+The app remains experimental and amd64-only. Live Home Assistant authentication and production TLS require separate validation.
+
 ## 0.0.6
 
 - Run unit/API/package, MQTT, TLS/topic-permission and security checks as separate parallel GitHub Actions jobs with individual logs and results.

@@ -69,7 +69,37 @@ jobs:
           docker load -i "$RUNNER_TEMP/built-image/image.tar"
           test "$(docker image inspect ha-ai-studio:dev --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
       - name: Run check
+        if: matrix.name != 'Security checks'
         run: ${{ matrix.command }}
+      - name: Check secrets in Git history and source
+        if: matrix.name == 'Security checks'
+        run: ./scripts/security-check.sh secrets
+      - name: Audit Python dependencies
+        if: matrix.name == 'Security checks'
+        run: ./scripts/security-check.sh dependencies
+      - name: Select Grype cache date
+        if: matrix.name == 'Security checks'
+        id: cache-date
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: Restore Grype vulnerability database
+        if: matrix.name == 'Security checks'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/grype-db
+          key: grype-${{ runner.os }}-${{ hashFiles('scripts/security-check.sh') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            grype-${{ runner.os }}-${{ hashFiles('scripts/security-check.sh') }}-
+      - name: Update Grype vulnerability database
+        if: matrix.name == 'Security checks'
+        env:
+          SECURITY_GRYPE_CACHE_DIR: ${{ runner.temp }}/grype-db
+        run: ./scripts/security-check.sh grype-db
+      - name: Scan built image for vulnerabilities
+        if: matrix.name == 'Security checks'
+        env:
+          SECURITY_GRYPE_CACHE_DIR: ${{ runner.temp }}/grype-db
+          SECURITY_IMAGE_ARCHIVE: ${{ runner.temp }}/built-image/image.tar
+        run: ./scripts/security-check.sh image
   verify:
     needs: [build, test]
     if: always()
