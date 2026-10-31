@@ -1,3 +1,8 @@
+## 0.0.12
+
+- Keep release-source integration tests in the container test suite instead of the pre-build release-tooling checks.
+- Fix the release workflow failing before image creation because the app runtime is unavailable on the host runner.
+
 ## 0.0.11
 
 - Add GitHub Release sources with latest stable or explicit stable tag selection.
