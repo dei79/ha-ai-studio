@@ -24,6 +24,7 @@ export interface ActionType {
   type: string;
   name: string;
   dynamic?: boolean;
+  capabilities?: string[];
   local?: boolean;
   editor?: string | null;
   version?: string;

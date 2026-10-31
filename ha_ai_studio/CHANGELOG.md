@@ -1,3 +1,9 @@
+## 0.0.9
+
+- Add private image assets and isolated previews for complex Actions.
+- Extend custom editors with image upload and preview capabilities.
+- Include Tesseract for local number-block recognition.
+
 ## 0.0.8
 
 - Upgrade checkout, artifact upload/download and cache Actions to releases that run natively on Node.js 24 in both CI workflows.

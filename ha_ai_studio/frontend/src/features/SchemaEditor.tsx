@@ -148,17 +148,29 @@ export function SchemaEditor({
     </>
   );
 }
+interface EditorContext {
+  changed: () => void;
+  uploadImage: (
+    file: File,
+  ) => Promise<{ id: string; width: number; height: number }>;
+  assetUrl: (id: string) => string;
+  removeImage: (id: string) => Promise<unknown>;
+  preview: (data: Json, settings: Json) => Promise<Json>;
+  previewImageUrl: (run: string, name: string) => string;
+}
 interface EditorModule {
   render: (
     host: HTMLElement,
     settings: Json,
-    context: { changed: () => void },
+    context: EditorContext,
   ) => (() => Json) | { read: () => Json; dispose: () => void };
 }
 // Trusted editor modules own this DOM island; React owns the surrounding form.
 export function LegacyEditor({
   type,
   editor,
+  actionId,
+  onBusy,
   settings,
   onReady,
   onError,
@@ -166,17 +178,51 @@ export function LegacyEditor({
 }: {
   type: string;
   editor?: string | null;
+  actionId?: string;
+  onBusy?: (busy: boolean) => void;
   settings: Json;
   onReady: (read: (() => Json) | null) => void;
   onError: (message: string) => void;
   onChange: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const callbacks = useRef({ onReady, onError, onChange });
-  callbacks.current = { onReady, onError, onChange };
+  const callbacks = useRef({ onReady, onError, onChange, onBusy });
+  callbacks.current = { onReady, onError, onChange, onBusy };
   useEffect(() => {
     let cancelled = false;
     let dispose: (() => void) | undefined;
+    const abort = new AbortController();
+    let pending = 0;
+    function endpoint(name: string, query: Record<string, string> = {}) {
+      if (!actionId) throw new Error("This editor has no instance context.");
+      const value = appUrl(`api/${name}`);
+      value.searchParams.set("id", actionId);
+      for (const [key, item] of Object.entries(query))
+        value.searchParams.set(key, item);
+      return value.href;
+    }
+    async function post(name: string, value: unknown) {
+      pending++;
+      callbacks.current.onBusy?.(true);
+      try {
+        const response = await fetch(endpoint(name), {
+          method: "POST",
+          signal: abort.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "X-HA-AI-Studio-Request": "1",
+          },
+          body: JSON.stringify(value),
+        });
+        const body = await response.json();
+        if (!response.ok)
+          throw new Error(body.error || "Editor request failed.");
+        return body;
+      } finally {
+        pending--;
+        if (!cancelled) callbacks.current.onBusy?.(pending > 0);
+      }
+    }
     const element = host.current!;
     callbacks.current.onReady(null);
     const url = appUrl(
@@ -186,6 +232,21 @@ export function LegacyEditor({
       .then((module: EditorModule) => {
         if (!cancelled) {
           const result = module.render(element, structuredClone(settings), {
+            removeImage: (id) => post("action-asset-delete", { id }),
+            assetUrl: (id) => endpoint("action-asset", { asset: id }),
+            previewImageUrl: (run, name) =>
+              endpoint("preview-image", { run, name }),
+            uploadImage: async (file) => {
+              if (file.size > 8 * 1024 * 1024)
+                throw new Error("Image must be at most 8 MiB.");
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              let binary = "";
+              for (let i = 0; i < bytes.length; i += 8192)
+                binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+              return await post("action-asset", { base64: btoa(binary) });
+            },
+            preview: (data, draft) =>
+              post("action-preview", { data, settings: draft }),
             changed: () => {
               if (!cancelled) callbacks.current.onChange();
             },
@@ -205,6 +266,8 @@ export function LegacyEditor({
       });
     return () => {
       cancelled = true;
+      abort.abort();
+      callbacks.current.onBusy?.(false);
       try {
         dispose?.();
       } catch {
@@ -216,6 +279,6 @@ export function LegacyEditor({
         callbacks.current.onReady(null);
       }
     };
-  }, [type, editor, settings]);
+  }, [type, editor, settings, actionId]);
   return <div ref={host} />;
 }

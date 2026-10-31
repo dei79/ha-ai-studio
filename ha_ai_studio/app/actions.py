@@ -56,6 +56,8 @@ class ActionService:
         self.plugin=repositories.bound(definition['plugin']) if definition.get('plugin') and repositories else TYPES.get(self.type)
         self.supported=self.plugin is not None
         self.environment=Environment(self.store,self.plugin) if definition.get('plugin') and self.plugin else None
+        from .assets import ActionAssets
+        self.assets=ActionAssets(self)
         self.identity=self.store.read('identity.json')
         if self.identity is None:
             ident='studio_'+hashlib.sha256((namespace+'/'+definition['id']).encode()).hexdigest()[:24];self.identity={'prefix':ident,'device_id':ident};self.store.write('identity.json',self.identity)

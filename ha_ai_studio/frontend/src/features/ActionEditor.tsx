@@ -69,6 +69,7 @@ export function ActionEditor({
   const [loadingError, setLoadingError] = useState("");
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [raw, setRaw] = useState("");
+  const [editorBusy, setEditorBusy] = useState(false);
   const [legacyReady, setLegacyReady] = useState(false);
   const legacyRead = useRef<(() => Json) | null>(null);
   const [panel, setPanel] = useState<"schemas" | "example" | "test" | null>(
@@ -83,9 +84,9 @@ export function ActionEditor({
     return () => onDirty(false);
   }, [dirty, onDirty]);
   useEffect(() => {
-    onBusy(op.busy);
+    onBusy(op.busy || editorBusy);
     return () => onBusy(false);
-  }, [op.busy, onBusy]);
+  }, [op.busy, editorBusy, onBusy]);
   function load(value: ActionState) {
     setState(value);
     if (!value.config || !value.supported) {
@@ -186,7 +187,8 @@ export function ActionEditor({
       </section>
     );
   const ready =
-    (!!state.plugin?.dynamic && !state.plugin.editor) || legacyReady;
+    !editorBusy &&
+    ((!!state.plugin?.dynamic && !state.plugin.editor) || legacyReady);
   return (
     <section>
       <Button variant="text" onClick={back} disabled={op.busy}>
@@ -213,7 +215,9 @@ export function ActionEditor({
           )}
           {state.plugin?.local && (
             <Button
-              disabled={op.busy || state.busy || state.enabled || dirty}
+              disabled={
+                op.busy || state.busy || state.enabled || dirty || editorBusy
+              }
               title="Save or discard changes and deactivate the action before reloading."
               onClick={() => {
                 version.current++;
@@ -368,6 +372,8 @@ export function ActionEditor({
                 <LegacyEditor
                   type={state.definition.type}
                   editor={state.plugin?.editor}
+                  actionId={id}
+                  onBusy={setEditorBusy}
                   settings={draft.settings}
                   onReady={(read) => {
                     legacyRead.current = read;

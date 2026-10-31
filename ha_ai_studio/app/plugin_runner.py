@@ -19,10 +19,16 @@ def main():
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         if not callable(getattr(module,'execute',None)):raise ValueError('Missing execute')
         # Bind the exact positional call without executing action code.
-        inspect.signature(module.execute).bind(None,{})
+        capabilities=request.get('capabilities',[])
+        kwargs={'context':{}} if capabilities else {}
+        inspect.signature(module.execute).bind(None,{},**kwargs)
+        if 'preview' in capabilities:
+            inspect.signature(module.preview).bind(None,{},context={})
         if request['mode']=='check':response={'ready':True}
         else:
-            result=module.execute(request['data'],request['settings'])
+            handler=module.preview if request['mode']=='preview' else module.execute
+            kwargs={'context':request['context']} if 'context' in request else {}
+            result=handler(request['data'],request['settings'],**kwargs)
             if inspect.isawaitable(result):result=asyncio.run(result)
             response={'data':result}
     sys.stdout.write(json.dumps(response,allow_nan=False))

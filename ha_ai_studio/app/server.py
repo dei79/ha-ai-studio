@@ -55,6 +55,19 @@ def create_app(root=None, dev=None):
 
     async def api(request):
         action = request.match_info['action']
+        if action in ('action-asset','action-asset-delete','action-preview','preview-image'):
+            from .assets import preview,preview_path
+            service=studio.get(request.query.get('id'))
+            if action=='action-asset':
+                if request.method=='GET':return web.FileResponse(service.assets.path(request.query.get('asset')))
+                if request.method=='POST':
+                    upload=request.clone(client_max_size=12*1024*1024)
+                    return web.json_response(await service.assets.upload(await upload.json()))
+            if action=='action-asset-delete' and request.method=='POST':return web.json_response(await service.assets.delete(await request.json()))
+            if action=='action-preview' and request.method=='POST':return web.json_response(await preview(service,await request.json()))
+            if action=='preview-image' and request.method=='GET':
+                return web.FileResponse(preview_path(service,request.query.get('run',''),request.query.get('name','')))
+            raise web.HTTPNotFound()
         if action == 'repositories':
             if request.method=='GET':return web.json_response(studio.repositories.public())
             if request.method=='POST':return web.json_response(await studio.repositories.save(await request.json()))

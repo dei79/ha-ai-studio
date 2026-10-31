@@ -125,7 +125,9 @@ async def manifest(root):
     if path.stat().st_size>32768:raise Invalid('Action manifest is too large.')
     try:
         value=json.loads(path.read_text())
-        if set(value)-{'id','name','description','version','python','entrypoint','settings_schema','input_schema','output_schema','example','editor'}:raise ValueError()
+        if set(value)-{'id','name','description','version','python','entrypoint','settings_schema','input_schema','output_schema','example','editor','capabilities'}:raise ValueError()
+        capabilities=value.get('capabilities',[])
+        if not isinstance(capabilities,list) or any(c not in ('assets','preview') for c in capabilities) or len(set(capabilities))!=len(capabilities):raise Invalid('Invalid action capabilities.')
         for key in ('id','name','description','version','python','entrypoint','settings_schema'):
             if key not in value:raise ValueError()
         if not re.fullmatch('[a-z][a-z0-9-]{0,47}',value['id']):raise ValueError()
@@ -166,7 +168,7 @@ class GitPlugin:
             example={'request_id':'example-001','data':{}}
         self.metadata={'type':record['type'],'name':self.manifest['name'],'description':self.manifest['description'],
             'input_schema':input_schema,'output_schema':output_schema,'settings_schema':copy.deepcopy(self.manifest['settings_schema']),
-            'example':copy.deepcopy(example),
+            'example':copy.deepcopy(example),'capabilities':list(self.manifest.get('capabilities',[])),
             'source':record['repository_id'],'version':self.manifest['version'],'commit':record['commit'],'dynamic':True,'local':record.get('source_kind')=='local',
             'editor':f"plugin-assets/{record['snapshot']}/{record['type']}/{self.manifest['editor']}" if self.manifest.get('editor') else None}
     async def validate(self,value):
@@ -388,7 +390,7 @@ class Environment:
             await process([sys.executable,'-m','venv',path],timeout=120)
             await process([path/'bin/python','-m','pip','install','--isolated','--disable-pip-version-check','--no-input','--require-hashes','--only-binary=:all:','-r',source/'requirements.lock'],cwd=source,timeout=300,venv=path)
             self.set('Verifying','Checking action entrypoint and runner protocol.')
-            response=await process([path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,payload=b'{"mode":"check"}',capture=True,timeout=30,venv=path)
+            response=await process([path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,payload=json.dumps({'mode':'check','capabilities':self.plugin.manifest.get('capabilities',[])}).encode(),capture=True,timeout=30,venv=path)
             if json.loads(response)!={'ready':True}:raise Invalid('Invalid runner response.')
             self.set('Ready','Environment is ready.',python=sys.version,commit=self.plugin.record['commit'])
         except asyncio.CancelledError:
@@ -398,9 +400,17 @@ class Environment:
             shutil.rmtree(path,ignore_errors=True)
             self.set('Failed','Environment setup failed. Check the entrypoint and hashed wheel dependencies, then rebuild.')
     async def execute(self,data,settings):
+        return await self.invoke(data,settings,'execute')
+    async def preview(self,data,settings,output):
+        return await self.invoke(data,settings,'preview',output)
+    async def invoke(self,data,settings,mode,output=None):
         self.require();source=self.path/'source'
+        request={'mode':mode,'data':data,'settings':settings,'capabilities':self.plugin.manifest.get('capabilities',[])}
+        if self.plugin.manifest.get('capabilities'):
+            request['context']={'mode':mode,'assets_dir':str(self.store.root/'assets')}
+            if output is not None:request['context']['output_dir']=str(output)
         response=await process([self.path/'bin/python','-I',RUNNER,source,self.plugin.manifest['entrypoint']],cwd=source,
-            payload=json.dumps({'mode':'execute','data':data,'settings':settings},allow_nan=False).encode(),capture=True,timeout=30,venv=self.path)
+            payload=json.dumps(request,allow_nan=False).encode(),capture=True,timeout=30,venv=self.path)
         try:
             value=json.loads(response,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
             if not isinstance(value,dict) or set(value)!={'data'} or not await schema_valid(self.plugin.manifest.get('output_schema',{}),value['data']):raise ValueError()

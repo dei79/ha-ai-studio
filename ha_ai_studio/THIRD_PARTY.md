@@ -1,6 +1,6 @@
 # Origin and dependencies
 
-The action core and Echo plugin are local project code evolved from the existing HA AI Studio development copy. No inference code, pretrained models, image processing or OCR runtime is shipped.
+The action core and Echo plugin are local project code evolved from the existing HA AI Studio development copy. Action-specific inference code and pretrained models are supplied by separate Action repositories. The runtime includes Tesseract OCR and English trained data from Ubuntu packages for local number-block recognition. Tesseract and its trained data retain their Apache-2.0 licenses; package copyright notices are retained under /usr/share/doc.
 
 Runtime dependencies come from PyPI and are pinned in `requirements.lock.txt`. Installed distribution metadata and license files remain in the container. Metadata inspected in the built amd64 image reports:
 
