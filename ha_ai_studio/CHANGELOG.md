@@ -1,3 +1,11 @@
+## 0.0.4
+
+- Update the release workflow repository guard to the ha-ai-studio organization so release jobs run after the repository transfer.
+- Publish container images under ghcr.io/ha-ai-studio/ha-ai-studio and align app metadata, repository URLs, OCI source labels and installation documentation.
+- Add a regression check for consistent repository identity across release inputs.
+
+The app remains experimental and amd64-only. The schema-validation limitation documented for 0.0.3 still applies.
+
 ## 0.0.3
 
 - Install dynamic action types from Git repositories into isolated per-instance Python environments with pinned commits and locked dependencies.

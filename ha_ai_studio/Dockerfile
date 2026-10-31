@@ -17,7 +17,7 @@ CMD ["python", "-m", "app.server"]
 ARG BUILD_VERSION=dev
 ARG BUILD_REVISION=unknown
 LABEL org.opencontainers.image.title="HA AI Studio" \
-      org.opencontainers.image.source="https://github.com/dei79/ha-ai-studio" \
+      org.opencontainers.image.source="https://github.com/ha-ai-studio/ha-ai-studio" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${BUILD_VERSION}" \
       org.opencontainers.image.revision="${BUILD_REVISION}" \

@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.repository == 'dei79/ha-ai-studio'
+    if: github.repository == 'ha-ai-studio/ha-ai-studio'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

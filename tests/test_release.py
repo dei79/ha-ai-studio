@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -22,3 +23,14 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):release.validate(self.root,'v1.2.3','other/studio')
         (self.root/'ha_ai_studio/app/discovery.py').write_text("VERSION = '1.2.2'\n")
         with self.assertRaises(ValueError):release.validate(self.root,'v1.2.3','example/studio')
+
+    @unittest.skipUnless((ROOT/'.github/workflows/release.yml').is_file(),'Workflow metadata is checked on the repository checkout')
+    def test_repository_identity_is_consistent_across_release_inputs(self):
+        repository='ha-ai-studio/ha-ai-studio'
+        config=(ROOT/'ha_ai_studio/config.yaml').read_text()
+        version=re.search(r'^version: "([^"\n]+)"$',config,re.MULTILINE).group(1)
+        self.assertEqual(release.validate(ROOT,'v'+version,repository)['target'],'ghcr.io/'+repository+':'+version)
+        self.assertIn("if: github.repository == '"+repository+"'",(ROOT/'.github/workflows/release.yml').read_text())
+        self.assertIn('url: https://github.com/'+repository,(ROOT/'repository.yaml').read_text())
+        self.assertIn('url: https://github.com/'+repository,config)
+        self.assertIn('org.opencontainers.image.source="https://github.com/'+repository+'"',(ROOT/'ha_ai_studio/Dockerfile').read_text())
