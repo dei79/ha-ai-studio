@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from pathlib import Path
 from aiohttp import web
 from .domain import Invalid
@@ -45,9 +46,12 @@ def create_app(root=None, dev=None):
 
     async def static(request):
         name = request.match_info['name']
-        if name not in ('app.js', 'style.css', 'ha-example.js', 'schema-editor.js'):
+        if not re.fullmatch(r'[A-Za-z0-9_-]+\.(?:js|css)', name):
             raise web.HTTPNotFound()
-        return web.FileResponse(STATIC / name)
+        path = STATIC / 'static' / name
+        if not path.is_file() or path.is_symlink():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
 
     async def api(request):
         action = request.match_info['action']

@@ -14,6 +14,8 @@ Local state persists in private `.dev-data`, excluded from builds/packages. `.en
 
 Optional **Settings → edit broker → Enable MQTT Discovery** announces Studio and configured Actions with availability and diagnostic entities. Explicitly select the broker used by HA and enable discovery; Input and Output remain independent.
 
+The frontend design system, build layout and isolated browser checks are documented in [frontend development](ha_ai_studio/frontend/README.md). The production frontend is built inside Docker and served by the Python backend in the same container.
+
 ## Install
 
 After the first successful container release, add `https://github.com/ha-ai-studio/ha-ai-studio` under **Settings → Apps → Install app → ⋮ → Repositories**, then install **HA AI Studio** and open its web UI through Ingress. This requires Home Assistant with Supervisor on amd64. The repository and GHCR package must be public for installation without registry credentials. The app is marked experimental. Action types are installed from Git repositories in Settings. Echo is maintained in the separate `ha-ai-studio-actions-core` repository; existing bundled Echo instances remain supported without automatic migration.
@@ -30,7 +32,7 @@ See [the guide and HA automation examples](ha_ai_studio/DOCS.md), [plugin contra
 
 ```sh
 ./scripts/test.sh
-./scripts/test-ui.sh  # Frontend regressions; requires Node.js 22.7+, no npm dependencies
+./scripts/test-ui.sh  # Frontend regressions; requires Node.js 22.21+; installs locked npm dependencies
 ./scripts/test-mqtt.sh
 ./scripts/test-mqtt-security.sh
 python3 -m unittest discover -s tests -p test_package.py -v
@@ -42,7 +44,7 @@ The MQTT check uses three temporary isolated Mosquitto brokers, never personal c
 
 ## Repository layout
 
-- `ha_ai_studio/`: installable HA app, runtime code, static UI, dependency manifest/lock and user guide.
+- `ha_ai_studio/`: installable HA app, Python runtime, React/TypeScript/SCSS frontend, dependency locks and user guide.
 - `ha_ai_studio/app/action_types/`: explicitly registered Action plugins; currently Echo only.
 - `tests/`: unit/API checks and isolated MQTT integration checks.
 - `scripts/`: test runners, local Ingress proxy and source packaging.

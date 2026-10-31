@@ -1,0 +1,72 @@
+// Semantic tokens are the public styling contract shared by all components.
+$space: (
+  1: 4px,
+  2: 8px,
+  3: 12px,
+  4: 16px,
+  5: 20px,
+  6: 24px,
+  8: 32px,
+);
+:root {
+  --font-body: Roboto, Arial, sans-serif;
+  --font-code: ui-monospace, monospace;
+  --accent: #03a9f4;
+  --accent-hover: #0288d1;
+  --accent-pressed: #0277bd;
+  --text: #212121;
+  --background: #fafafa;
+  --card: #fff;
+  --border: #ddd;
+  --muted: #666;
+  --hover: #e8f5fc;
+  --panel-header: #e8edf2;
+  --danger: #c62828;
+  --notice: #e7f5fc;
+  --notice-border: #b4dce9;
+  --warning: #fff4e5;
+  --warning-border: #dcad62;
+  --success: #2e7d32;
+  --pending: #f9a825;
+  --code-background: #f5f7f9;
+  --log-background: #000;
+  --log-text: #39ff14;
+  --log-border: #263b29;
+  --radius-control: 5px;
+  --radius-card: 10px;
+  --header-height: 64px;
+  --panel-width: 640px;
+  --shadow-card: 0 1px 2px #0001;
+  --shadow-header: 0 2px 5px #0002;
+  --shadow-panel: -4px 0 20px #0002;
+  --json-key: #0550ae;
+  --json-string: #116329;
+  --json-number: #953800;
+  --json-literal: #8250df;
+  --json-punctuation: #57606a;
+  @each $key, $value in $space {
+    --space-#{$key}: #{$value};
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --text: #eee;
+    --background: #111;
+    --card: #202020;
+    --border: #444;
+    --muted: #aaa;
+    --hover: #153a4b;
+    --panel-header: #303d49;
+    --notice: #153a4b;
+    --warning: #48351d;
+    --success: #66bb6a;
+    --danger: #ff8a80;
+    --code-background: #181c20;
+    --json-key: #79c0ff;
+    --json-string: #a5d6a7;
+    --json-number: #ffa657;
+    --json-literal: #d2a8ff;
+    --json-punctuation: #adb5bd;
+  }
+}

@@ -9,13 +9,41 @@ APP_FILES = (
     '.dockerignore', 'config.yaml', 'Dockerfile', 'DOCS.md', 'CHANGELOG.md',
     'LICENSE', 'README.md', 'icon.png', 'logo.png', 'icon.svg', 'THIRD_PARTY.md', 'requirements.txt', 'requirements.lock.txt',
 )
-STATIC_FILES = ('index.html', 'app.js', 'ha-example.js', 'schema-editor.js', 'style.css')
+FRONTEND_FILES = (
+    'README.md',
+    'index.html',
+    'package.json',
+    'package-lock.json',
+    'tsconfig.json',
+    'vite.config.ts',
+    'src/test-setup.ts',
+    'src/regressions.test.tsx',
+    'src/App.tsx',
+    'src/design-system/index.tsx',
+    'src/features/ActionEditor.tsx',
+    'src/features/ActionPanels.tsx',
+    'src/features/ActionsPage.tsx',
+    'src/features/BrokerPanels.tsx',
+    'src/features/LivePage.tsx',
+    'src/features/SchemaEditor.tsx',
+    'src/features/SettingsPage.tsx',
+    'src/lib/api.ts',
+    'src/lib/ha-example.ts',
+    'src/lib/hooks.ts',
+    'src/lib/types.ts',
+    'src/main.tsx',
+    'src/styles/_app.scss',
+    'src/styles/_base.scss',
+    'src/styles/_components.scss',
+    'src/styles/_tokens.scss',
+    'src/styles/main.scss',
+)
 
 
 def public_files(app):
     """Exclude private data, caches, captures and unregistered frontend assets."""
     files = [app / name for name in APP_FILES]
-    files += [app / 'app' / 'static' / name for name in STATIC_FILES]
+    files += [app / 'frontend' / name for name in FRONTEND_FILES]
     files += sorted((app / 'app').rglob('*.py'))
     files += [app / 'app' / 'action_types' / 'README.md',
               app / 'app' / 'action_types' / 'legacy_echo' / 'editor.js']
