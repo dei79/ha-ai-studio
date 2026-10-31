@@ -9,13 +9,14 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  release:
+  build:
     if: github.repository == 'ha-ai-studio/ha-ai-studio'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
-      packages: write
+    outputs:
+      artifact-id: ${{ steps.image-artifact.outputs.artifact-id }}
+      image-id: ${{ steps.image.outputs.id }}
+      target: ${{ steps.metadata.outputs.target }}
     env:
       BUILD_REVISION: ${{ github.sha }}
     steps:
@@ -35,8 +36,79 @@ jobs:
         env:
           BUILD_VERSION: ${{ steps.metadata.outputs.version }}
         run: docker compose build --quiet
-      - name: Run all checks in parallel on the release image
-        run: python3 scripts/parallel_checks.py
+      - name: Export built image
+        id: image
+        run: |
+          docker save ha-ai-studio:dev -o "$RUNNER_TEMP/image.tar"
+          echo "id=$(docker image inspect ha-ai-studio:dev --format '{{.Id}}')" >> "$GITHUB_OUTPUT"
+      - name: Upload built image
+        id: image-artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: amd64-image-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          retention-days: 7
+  test:
+    name: ${{ matrix.name }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Unit, API and package tests
+            command: ./scripts/test.sh --skip-build
+          - name: MQTT integration tests
+            command: ./scripts/test-mqtt.sh
+          - name: TLS and topic permissions
+            command: ./scripts/test-mqtt-security.sh
+          - name: Security checks
+            command: ./scripts/security-check.sh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download built image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/built-image
+      - name: Load and verify built image
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image-id }}
+        run: |
+          docker load -i "$RUNNER_TEMP/built-image/image.tar"
+          test "$(docker image inspect ha-ai-studio:dev --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
+      - name: Run check
+        run: ${{ matrix.command }}
+  release:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download built image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/built-image
+      - name: Load and verify built image
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image-id }}
+        run: |
+          docker load -i "$RUNNER_TEMP/built-image/image.tar"
+          test "$(docker image inspect ha-ai-studio:dev --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
       - name: Prepare release notes
         id: notes
         env:
@@ -52,7 +124,7 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - name: Publish the exact tested image
         env:
-          TARGET: ${{ steps.metadata.outputs.target }}
+          TARGET: ${{ needs.build.outputs.target }}
         run: |
           docker tag ha-ai-studio:dev "$TARGET"
           docker push "$TARGET"

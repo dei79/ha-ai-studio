@@ -1,3 +1,12 @@
+## 0.0.6
+
+- Run unit/API/package, MQTT, TLS/topic-permission and security checks as separate parallel GitHub Actions jobs with individual logs and results.
+- Build the amd64 image once and share it between jobs as a workflow artifact; verify its image ID before testing and publication.
+- Require every check to pass before packaging or publishing, while allowing other test suites to finish after a failure.
+- Limit release write permissions to the publishing job and document artifact retention and workflow reruns.
+
+The app remains experimental and amd64-only. Live Home Assistant authentication and production TLS require separate validation.
+
 ## 0.0.5
 
 - Migrate the frontend to React, TypeScript and an SCSS design system, with regression tests and type checks in the container build.

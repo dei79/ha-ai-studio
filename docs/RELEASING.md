@@ -30,7 +30,8 @@ These commands are instructions, not performed automatically. Use a new version 
 
 - Validates the tag, app version, Discovery version, amd64 support and image destination before building.
 - Builds the Ubuntu-based amd64 image with version, source, revision, license and Home Assistant labels.
-- Runs unit/API/package tests, isolated MQTT tests, TLS/ACL tests, secret scanning and dependency/container audits.
+- Exports the image as a workflow artifact, then runs four parallel matrix jobs on separate runners: unit/API/package tests, isolated MQTT tests, TLS/ACL tests, and security scans/audits. Every job verifies the loaded image ID against the build output; failed checks do not cancel other suites.
+- Starts the release job only after all four suites pass. It downloads and verifies the same image, with write permissions granted only to this publishing job. Image artifacts expire after seven days; after expiry, rerun the full workflow to rebuild and retest.
 - Generates release notes using the OpenAI Responses API with a validated structured response, or the changelog fallback.
 - Logs in to GHCR using the workflow's `GITHUB_TOKEN` with `packages: write`.
 - Tags and pushes the exact tested image as `ghcr.io/ha-ai-studio/ha-ai-studio:<version>`; it does not rebuild after testing.
